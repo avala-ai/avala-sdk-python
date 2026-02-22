@@ -22,6 +22,11 @@ from avala.errors import (
 class SyncHTTPTransport:
     def __init__(self, config: ClientConfig) -> None:
         self._config = config
+        self._last_rate_limit: dict[str, str | None] = {
+            "limit": None,
+            "remaining": None,
+            "reset": None,
+        }
         self._client = httpx.Client(
             base_url=config.base_url,
             headers={
@@ -31,8 +36,20 @@ class SyncHTTPTransport:
             timeout=config.timeout,
         )
 
+    @property
+    def last_rate_limit(self) -> dict[str, str | None]:
+        return dict(self._last_rate_limit)
+
+    def _extract_rate_limit_headers(self, response: httpx.Response) -> None:
+        self._last_rate_limit = {
+            "limit": response.headers.get("X-RateLimit-Limit"),
+            "remaining": response.headers.get("X-RateLimit-Remaining"),
+            "reset": response.headers.get("X-RateLimit-Reset"),
+        }
+
     def request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = self._client.request(method, path, **kwargs)
+        self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
         if response.status_code == 204:
             return None
@@ -40,6 +57,7 @@ class SyncHTTPTransport:
 
     def request_page(self, path: str, model_cls: type, params: dict[str, Any] | None = None) -> CursorPage[Any]:
         response = self._client.get(path, params=params)
+        self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
         data = response.json()
         items = [model_cls.model_validate(item) for item in data.get("results", [])]
@@ -70,7 +88,9 @@ class SyncHTTPTransport:
         if status == 429:
             retry_after = response.headers.get("Retry-After")
             raise RateLimitError(
-                message, status, body,
+                message,
+                status,
+                body,
                 retry_after=float(retry_after) if retry_after else None,
             )
         if status in (400, 422):

@@ -6,8 +6,12 @@ from avala.resources.projects import AsyncProjects, Projects
 from avala.resources.tasks import AsyncTasks, Tasks
 
 __all__ = [
-    "Datasets", "AsyncDatasets",
-    "Exports", "AsyncExports",
-    "Projects", "AsyncProjects",
-    "Tasks", "AsyncTasks",
+    "Datasets",
+    "AsyncDatasets",
+    "Exports",
+    "AsyncExports",
+    "Projects",
+    "AsyncProjects",
+    "Tasks",
+    "AsyncTasks",
 ]

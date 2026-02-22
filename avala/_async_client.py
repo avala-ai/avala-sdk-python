@@ -10,6 +10,7 @@ from avala._config import ClientConfig
 from avala.resources.datasets import AsyncDatasets
 from avala.resources.exports import AsyncExports
 from avala.resources.projects import AsyncProjects
+from avala.resources.storage_configs import AsyncStorageConfigs
 from avala.resources.tasks import AsyncTasks
 
 
@@ -25,13 +26,22 @@ class AsyncClient:
         max_retries: int = 2,
     ) -> None:
         config = ClientConfig.from_params(
-            api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries,
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
         )
         self._transport = AsyncHTTPTransport(config)
         self.datasets = AsyncDatasets(self._transport)
         self.projects = AsyncProjects(self._transport)
         self.exports = AsyncExports(self._transport)
         self.tasks = AsyncTasks(self._transport)
+        self.storage_configs = AsyncStorageConfigs(self._transport)
+
+    @property
+    def rate_limit_info(self) -> dict[str, str | None]:
+        """Return rate limit headers from the last API response."""
+        return self._transport.last_rate_limit
 
     async def close(self) -> None:
         await self._transport.close()

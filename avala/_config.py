@@ -24,12 +24,8 @@ class ClientConfig:
     ) -> ClientConfig:
         resolved_key = api_key or os.environ.get("AVALA_API_KEY", "")
         if not resolved_key:
-            raise ValueError(
-                "No API key provided. Pass api_key= or set the AVALA_API_KEY environment variable."
-            )
-        resolved_url = base_url or os.environ.get(
-            "AVALA_BASE_URL", "https://server.avala.ai/api/v1"
-        )
+            raise ValueError("No API key provided. Pass api_key= or set the AVALA_API_KEY environment variable.")
+        resolved_url = base_url or os.environ.get("AVALA_BASE_URL", "https://server.avala.ai/api/v1")
         return cls(
             api_key=resolved_key,
             base_url=resolved_url.rstrip("/"),
