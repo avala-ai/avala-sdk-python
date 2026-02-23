@@ -61,7 +61,7 @@ def consensus_compute(ctx: click.Context, project: str) -> None:
     """Compute consensus scores for a project."""
     client = ctx.obj["client"]
     result = client.consensus.compute(project)
-    click.echo(f"Computed: {result.computed}, Skipped: {result.skipped}, Errors: {result.error_count}")
+    click.echo(f"Status: {result.status} — {result.message}")
 
 
 @consensus.command("config")

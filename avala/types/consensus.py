@@ -38,6 +38,5 @@ class ConsensusSummary(BaseModel):
 
 
 class ConsensusComputeResult(BaseModel):
-    computed: int
-    skipped: int
-    error_count: int
+    status: str
+    message: str
