@@ -108,6 +108,12 @@ avala datasets list                # List datasets
 avala projects list                # List projects
 avala exports create <project-uid> # Create an export
 avala storage-configs list         # List storage configs
+avala agents list                  # List automation agents
+avala inference-providers list     # List inference providers
+avala auto-label list              # List auto-label jobs
+avala quality-targets list -p <uid> # List quality targets
+avala consensus summary -p <uid>   # Get consensus summary
+avala webhooks list                # List webhook subscriptions
 ```
 
 ## Available Resources
@@ -119,6 +125,13 @@ avala storage-configs list         # List storage configs
 | `client.exports` | `list()`, `get(uid)`, `create()` | Create and manage annotation exports |
 | `client.tasks` | `list()`, `get(uid)` | Browse tasks with project/status filters |
 | `client.storage_configs` | `list()`, `create()`, `test()`, `delete()` | Manage cloud storage connections |
+| `client.agents` | `list()`, `get()`, `create()`, `update()`, `delete()`, `list_executions()`, `test()` | Manage automation agents |
+| `client.inference_providers` | `list()`, `get()`, `create()`, `update()`, `delete()`, `test()` | Manage inference providers |
+| `client.auto_label_jobs` | `list()`, `get()`, `create()` | Batch auto-labeling jobs |
+| `client.quality_targets` | `list()`, `get()`, `create()`, `update()`, `delete()`, `evaluate()` | Project quality targets |
+| `client.consensus` | `get_summary()`, `list_scores()`, `compute()`, `get_config()`, `update_config()` | Consensus scoring |
+| `client.webhooks` | `list()`, `get()`, `create()`, `update()`, `delete()`, `test()` | Manage webhook subscriptions |
+| `client.webhook_deliveries` | `list()`, `get()` | Inspect webhook delivery logs |
 
 ## Documentation
 
