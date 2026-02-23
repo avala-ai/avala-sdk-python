@@ -7,6 +7,7 @@ from avala._http import SyncHTTPTransport
 from avala.resources.datasets import Datasets
 from avala.resources.exports import Exports
 from avala.resources.projects import Projects
+from avala.resources.storage_configs import StorageConfigs
 from avala.resources.tasks import Tasks
 
 
@@ -32,6 +33,12 @@ class Client:
         self.projects = Projects(self._transport)
         self.exports = Exports(self._transport)
         self.tasks = Tasks(self._transport)
+        self.storage_configs = StorageConfigs(self._transport)
+
+    @property
+    def rate_limit_info(self) -> dict[str, str | None]:
+        """Return rate limit headers from the last API response."""
+        return self._transport.last_rate_limit
 
     def close(self) -> None:
         self._transport.close()

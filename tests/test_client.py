@@ -3,18 +3,11 @@ import pytest
 from avala import Client
 
 
-def test_client_requires_api_key():
+def test_client_requires_api_key(monkeypatch: pytest.MonkeyPatch):
     """Client raises ValueError when no API key is provided."""
-    import os
-
-    # Ensure env var is not set
-    env_key = os.environ.pop("AVALA_API_KEY", None)
-    try:
-        with pytest.raises(ValueError, match="No API key"):
-            Client()
-    finally:
-        if env_key is not None:
-            os.environ["AVALA_API_KEY"] = env_key
+    monkeypatch.delenv("AVALA_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="No API key"):
+        Client()
 
 
 def test_client_accepts_api_key():

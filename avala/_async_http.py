@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Type
 
 import httpx
 from pydantic import BaseModel
@@ -23,6 +23,11 @@ from avala.errors import (
 class AsyncHTTPTransport:
     def __init__(self, config: ClientConfig) -> None:
         self._config = config
+        self._last_rate_limit: dict[str, str | None] = {
+            "limit": None,
+            "remaining": None,
+            "reset": None,
+        }
         self._client = httpx.AsyncClient(
             base_url=config.base_url,
             headers={
@@ -32,17 +37,30 @@ class AsyncHTTPTransport:
             timeout=config.timeout,
         )
 
+    @property
+    def last_rate_limit(self) -> dict[str, str | None]:
+        return dict(self._last_rate_limit)
+
+    def _extract_rate_limit_headers(self, response: httpx.Response) -> None:
+        self._last_rate_limit = {
+            "limit": response.headers.get("X-RateLimit-Limit"),
+            "remaining": response.headers.get("X-RateLimit-Remaining"),
+            "reset": response.headers.get("X-RateLimit-Reset"),
+        }
+
     async def request(self, method: str, path: str, **kwargs: Any) -> Any:
         response = await self._client.request(method, path, **kwargs)
+        self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
         if response.status_code == 204:
             return None
         return response.json()
 
     async def request_page(
-        self, path: str, model_cls: type[BaseModel], params: dict[str, Any] | None = None
+        self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None
     ) -> CursorPage[Any]:
         response = await self._client.get(path, params=params)
+        self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
         data = response.json()
         items = [model_cls.model_validate(item) for item in data.get("results", [])]

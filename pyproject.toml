@@ -4,19 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "avala"
-version = "0.1.0"
+version = "0.2.0"
 description = "Official Python SDK for the Avala API"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-authors = [{name = "Avala Developer", email = "developer@avala.ai"}]
 dependencies = ["httpx>=0.24,<1", "pydantic>=2.0,<3"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "respx>=0.20", "mypy>=1", "ruff>=0.1"]
+dev = ["pytest>=7", "respx>=0.20", "mypy>=1", "ruff>=0.1", "pytest-asyncio>=0.21"]
+cli = ["click>=8.0", "rich>=13.0"]
+
+[project.scripts]
+avala = "avala.cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 120
 
 [tool.mypy]
 strict = true
+exclude = ["avala/cli/"]
