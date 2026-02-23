@@ -94,6 +94,22 @@ except AvalaError as e:
     print(f"API error: {e}")
 ```
 
+## CLI Tool
+
+Install with CLI extras for a command-line interface:
+
+```bash
+pip install avala[cli]
+```
+
+```bash
+avala configure                    # Interactive API key setup
+avala datasets list                # List datasets
+avala projects list                # List projects
+avala exports create <project-uid> # Create an export
+avala storage-configs list         # List storage configs
+```
+
 ## Available Resources
 
 | Resource | Methods | Description |
@@ -102,6 +118,7 @@ except AvalaError as e:
 | `client.projects` | `list()`, `get(uid)` | Browse and inspect projects |
 | `client.exports` | `list()`, `get(uid)`, `create()` | Create and manage annotation exports |
 | `client.tasks` | `list()`, `get(uid)` | Browse tasks with project/status filters |
+| `client.storage_configs` | `list()`, `create()`, `test()`, `delete()` | Manage cloud storage connections |
 
 ## Documentation
 
