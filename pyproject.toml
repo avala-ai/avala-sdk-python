@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "avala"
-version = "0.2.0"
+version = "0.1.0"
 description = "Official Python SDK for the Avala API"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
+authors = [{name = "Avala Developer", email = "developer@avala.ai"}]
 dependencies = ["httpx>=0.24,<1", "pydantic>=2.0,<3"]
 
 [project.optional-dependencies]
