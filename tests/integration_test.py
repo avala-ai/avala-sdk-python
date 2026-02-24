@@ -1,11 +1,11 @@
 """
-Full integration test for the Avala Python SDK (v0.2.1).
+Full integration test for the Avala Python SDK (v0.3.0).
 
 Exercises every resource and method against the live production API.
 Run with: python3 tests/integration_test.py
 
 Requires: AVALA_API_KEY environment variable set.
-Target: https://server.avala.ai/api/v1 (production)
+Target: https://api.avala.ai/api/v1 (production)
 
 All test-created resources use '__sdk_test_' prefix and are cleaned up via try/finally.
 """
