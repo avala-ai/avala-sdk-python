@@ -2,9 +2,12 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/avala)](https://pypi.org/project/avala/)
 [![Python](https://img.shields.io/pypi/pyversions/avala)](https://pypi.org/project/avala/)
+[![CI](https://github.com/avala-ai/avala-sdk-python/actions/workflows/ci.yml/badge.svg)](https://github.com/avala-ai/avala-sdk-python/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Official Python SDK for the [Avala API](https://docs.avala.ai). Build and manage ML annotation datasets, projects, exports, and tasks programmatically.
+
+> **Note:** This repository is a read-only mirror. To report bugs or request features, please [open an issue](https://github.com/avala-ai/avala-sdk-python/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Installation
 
