@@ -18,7 +18,7 @@ from avala.errors import (
 )
 from avala.types.dataset import Dataset
 
-BASE_URL = "https://server.avala.ai/api/v1"
+BASE_URL = "https://api.avala.ai/api/v1"
 
 
 def make_transport(api_key: str = "test-key", base_url: str = BASE_URL) -> SyncHTTPTransport:
@@ -217,7 +217,7 @@ class TestErrorHandling:
 
 class TestCursorExtraction:
     def test_extract_cursor_from_url(self):
-        url = "https://server.avala.ai/api/v1/datasets/?cursor=abc123&limit=10"
+        url = "https://api.avala.ai/api/v1/datasets/?cursor=abc123&limit=10"
         assert _extract_cursor(url) == "abc123"
 
     def test_extract_cursor_none_url(self):
@@ -227,5 +227,5 @@ class TestCursorExtraction:
         assert _extract_cursor("") is None
 
     def test_extract_cursor_no_cursor_param(self):
-        url = "https://server.avala.ai/api/v1/datasets/?limit=10"
+        url = "https://api.avala.ai/api/v1/datasets/?limit=10"
         assert _extract_cursor(url) is None

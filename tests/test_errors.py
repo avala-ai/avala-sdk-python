@@ -7,7 +7,7 @@ import respx
 from avala import Client
 from avala.errors import AuthenticationError, AvalaError, NotFoundError, RateLimitError, ServerError, ValidationError
 
-BASE_URL = "https://server.avala.ai/api/v1"
+BASE_URL = "https://api.avala.ai/api/v1"
 
 
 @respx.mock

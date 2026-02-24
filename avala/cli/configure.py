@@ -16,12 +16,12 @@ def configure() -> None:
     base_url = click.prompt(
         "Base URL",
         type=str,
-        default="https://server.avala.ai/api/v1",
+        default="https://api.avala.ai/api/v1",
         show_default=True,
     )
 
     click.echo("\nAdd these to your shell profile (.bashrc, .zshrc, etc.):\n")
     click.echo(f"  export AVALA_API_KEY={shlex.quote(api_key)}")
-    if base_url != "https://server.avala.ai/api/v1":
+    if base_url != "https://api.avala.ai/api/v1":
         click.echo(f"  export AVALA_BASE_URL={shlex.quote(base_url)}")
     click.echo("\nOr pass them as flags: avala --api-key <key> <command>")

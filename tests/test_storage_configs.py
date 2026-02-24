@@ -6,7 +6,7 @@ from avala import Client
 
 @respx.mock
 def test_list_storage_configs():
-    respx.get("https://server.avala.ai/api/v1/storage-configs/").mock(
+    respx.get("https://api.avala.ai/api/v1/storage-configs/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -44,7 +44,7 @@ def test_list_storage_configs():
 
 @respx.mock
 def test_create_storage_config():
-    respx.post("https://server.avala.ai/api/v1/storage-configs/").mock(
+    respx.post("https://api.avala.ai/api/v1/storage-configs/").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -82,7 +82,7 @@ def test_create_storage_config():
 @respx.mock
 def test_test_storage_config():
     uid = "550e8400-e29b-41d4-a716-446655440000"
-    respx.post(f"https://server.avala.ai/api/v1/storage-configs/{uid}/test/").mock(
+    respx.post(f"https://api.avala.ai/api/v1/storage-configs/{uid}/test/").mock(
         return_value=httpx.Response(200, json={"verified": True})
     )
     client = Client(api_key="test-key")
@@ -94,7 +94,7 @@ def test_test_storage_config():
 @respx.mock
 def test_delete_storage_config():
     uid = "550e8400-e29b-41d4-a716-446655440000"
-    respx.delete(f"https://server.avala.ai/api/v1/storage-configs/{uid}/").mock(return_value=httpx.Response(204))
+    respx.delete(f"https://api.avala.ai/api/v1/storage-configs/{uid}/").mock(return_value=httpx.Response(204))
     client = Client(api_key="test-key")
     client.storage_configs.delete(uid)
     client.close()
@@ -102,7 +102,7 @@ def test_delete_storage_config():
 
 @respx.mock
 def test_rate_limit_headers():
-    respx.get("https://server.avala.ai/api/v1/storage-configs/").mock(
+    respx.get("https://api.avala.ai/api/v1/storage-configs/").mock(
         return_value=httpx.Response(
             200,
             headers={

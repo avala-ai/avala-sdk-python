@@ -6,7 +6,7 @@ from avala import Client
 
 @respx.mock
 def test_list_datasets():
-    respx.get("https://server.avala.ai/api/v1/datasets/").mock(
+    respx.get("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -35,7 +35,7 @@ def test_list_datasets():
 @respx.mock
 def test_get_dataset():
     uid = "550e8400-e29b-41d4-a716-446655440000"
-    respx.get(f"https://server.avala.ai/api/v1/datasets/{uid}/").mock(
+    respx.get(f"https://api.avala.ai/api/v1/datasets/{uid}/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -55,12 +55,12 @@ def test_get_dataset():
 
 @respx.mock
 def test_list_datasets_with_pagination():
-    respx.get("https://server.avala.ai/api/v1/datasets/").mock(
+    respx.get("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(
             200,
             json={
                 "results": [{"uid": "aaa", "name": "Dataset 1", "slug": "ds-1", "item_count": 10}],
-                "next": "https://server.avala.ai/api/v1/datasets/?cursor=abc123",
+                "next": "https://api.avala.ai/api/v1/datasets/?cursor=abc123",
                 "previous": None,
             },
         )

@@ -13,7 +13,7 @@ from avala.cli import main  # noqa: E402
 
 @respx.mock
 def test_datasets_list():
-    respx.get("https://server.avala.ai/api/v1/datasets/").mock(
+    respx.get("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -41,7 +41,7 @@ def test_datasets_list():
 @respx.mock
 def test_datasets_get():
     uid = "abc123"
-    respx.get(f"https://server.avala.ai/api/v1/datasets/{uid}/").mock(
+    respx.get(f"https://api.avala.ai/api/v1/datasets/{uid}/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -63,7 +63,7 @@ def test_datasets_get():
 
 @respx.mock
 def test_projects_list():
-    respx.get("https://server.avala.ai/api/v1/projects/").mock(
+    respx.get("https://api.avala.ai/api/v1/projects/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -89,7 +89,7 @@ def test_projects_list():
 
 @respx.mock
 def test_storage_configs_list():
-    respx.get("https://server.avala.ai/api/v1/storage-configs/").mock(
+    respx.get("https://api.avala.ai/api/v1/storage-configs/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -116,7 +116,7 @@ def test_storage_configs_list():
 
 @respx.mock
 def test_exports_list():
-    respx.get("https://server.avala.ai/api/v1/exports/").mock(
+    respx.get("https://api.avala.ai/api/v1/exports/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -142,7 +142,7 @@ def test_exports_list():
 
 @respx.mock
 def test_tasks_list():
-    respx.get("https://server.avala.ai/api/v1/tasks/").mock(
+    respx.get("https://api.avala.ai/api/v1/tasks/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -176,7 +176,7 @@ def test_missing_api_key():
 
 @respx.mock
 def test_api_key_via_env():
-    respx.get("https://server.avala.ai/api/v1/datasets/").mock(
+    respx.get("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(
             200,
             json={"results": [], "next": None, "previous": None},
@@ -189,7 +189,7 @@ def test_api_key_via_env():
 
 @respx.mock
 def test_auth_failure():
-    respx.get("https://server.avala.ai/api/v1/datasets/").mock(
+    respx.get("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(401, json={"detail": "Invalid API key"})
     )
     runner = CliRunner()

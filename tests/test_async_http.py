@@ -17,7 +17,7 @@ from avala.errors import (
 )
 from avala.types.dataset import Dataset
 
-BASE_URL = "https://server.avala.ai/api/v1"
+BASE_URL = "https://api.avala.ai/api/v1"
 
 
 def make_transport(api_key: str = "test-key", base_url: str = BASE_URL) -> AsyncHTTPTransport:
