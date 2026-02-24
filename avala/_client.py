@@ -5,13 +5,16 @@ from __future__ import annotations
 from avala._config import ClientConfig
 from avala._http import SyncHTTPTransport
 from avala.resources.agents import Agents
+from avala.resources.annotation_issues import AnnotationIssues
 from avala.resources.auto_label_jobs import AutoLabelJobs
 from avala.resources.consensus import Consensus
 from avala.resources.datasets import Datasets
 from avala.resources.exports import Exports
 from avala.resources.inference_providers import InferenceProviders
+from avala.resources.organizations import Organizations
 from avala.resources.projects import Projects
 from avala.resources.quality_targets import QualityTargets
+from avala.resources.slices import Slices
 from avala.resources.storage_configs import StorageConfigs
 from avala.resources.tasks import Tasks
 from avala.resources.webhooks import WebhookDeliveries, Webhooks
@@ -36,13 +39,16 @@ class Client:
         )
         self._transport = SyncHTTPTransport(config)
         self.agents = Agents(self._transport)
+        self.annotation_issues = AnnotationIssues(self._transport)
         self.auto_label_jobs = AutoLabelJobs(self._transport)
         self.consensus = Consensus(self._transport)
         self.datasets = Datasets(self._transport)
         self.exports = Exports(self._transport)
         self.inference_providers = InferenceProviders(self._transport)
+        self.organizations = Organizations(self._transport)
         self.projects = Projects(self._transport)
         self.quality_targets = QualityTargets(self._transport)
+        self.slices = Slices(self._transport)
         self.storage_configs = StorageConfigs(self._transport)
         self.tasks = Tasks(self._transport)
         self.webhooks = Webhooks(self._transport)

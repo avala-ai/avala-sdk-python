@@ -68,6 +68,16 @@ class AsyncHTTPTransport:
         previous_cursor = _extract_cursor(data.get("previous"))
         return CursorPage(items=items, next_cursor=next_cursor, previous_cursor=previous_cursor)
 
+    async def request_list(
+        self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None
+    ) -> list[Any]:
+        """Fetch an endpoint that returns a plain JSON array (no pagination wrapper)."""
+        response = await self._client.get(path, params=params)
+        self._extract_rate_limit_headers(response)
+        self._raise_for_status(response)
+        data = response.json()
+        return [model_cls.model_validate(item) for item in data]
+
     async def close(self) -> None:
         await self._client.aclose()
 

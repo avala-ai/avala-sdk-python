@@ -68,6 +68,14 @@ class SyncHTTPTransport:
         previous_cursor = _extract_cursor(data.get("previous"))
         return CursorPage(items=items, next_cursor=next_cursor, previous_cursor=previous_cursor)
 
+    def request_list(self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None) -> list[Any]:
+        """Fetch an endpoint that returns a plain JSON array (no pagination wrapper)."""
+        response = self._client.get(path, params=params)
+        self._extract_rate_limit_headers(response)
+        self._raise_for_status(response)
+        data = response.json()
+        return [model_cls.model_validate(item) for item in data]
+
     def close(self) -> None:
         self._client.close()
 
@@ -109,5 +117,9 @@ def _extract_cursor(url: str | None) -> str | None:
         return None
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
-    cursors = qs.get("cursor", [])
-    return cursors[0] if cursors else None
+    # Support both cursor-based and page-number pagination
+    for key in ("cursor", "page"):
+        values = qs.get(key, [])
+        if values:
+            return values[0]
+    return None
