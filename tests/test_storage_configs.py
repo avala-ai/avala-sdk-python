@@ -70,8 +70,8 @@ def test_create_storage_config():
         provider="aws_s3",
         s3_bucket_name="my-bucket",
         s3_bucket_region="us-east-1",
-        s3_access_key_id="AKIAEXAMPLE",
-        s3_secret_access_key="secret",
+        s3_access_key_id="TEST_KEY_NOT_REAL",
+        s3_secret_access_key="TEST_SECRET_NOT_REAL",
     )
     assert config.name == "My S3 Bucket"
     assert config.provider == "aws_s3"

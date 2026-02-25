@@ -8,7 +8,7 @@ import httpx
 from pydantic import BaseModel
 
 from avala._config import ClientConfig
-from avala._http import _extract_cursor
+from avala._http import _extract_cursor, _validate_path
 from avala._pagination import CursorPage
 from avala.errors import (
     AuthenticationError,
@@ -49,6 +49,7 @@ class AsyncHTTPTransport:
         }
 
     async def request(self, method: str, path: str, **kwargs: Any) -> Any:
+        _validate_path(path)
         response = await self._client.request(method, path, **kwargs)
         self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
@@ -59,6 +60,7 @@ class AsyncHTTPTransport:
     async def request_page(
         self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None
     ) -> CursorPage[Any]:
+        _validate_path(path)
         response = await self._client.get(path, params=params)
         self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
@@ -72,6 +74,7 @@ class AsyncHTTPTransport:
         self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None
     ) -> list[Any]:
         """Fetch an endpoint that returns a plain JSON array (no pagination wrapper)."""
+        _validate_path(path)
         response = await self._client.get(path, params=params)
         self._extract_rate_limit_headers(response)
         self._raise_for_status(response)

@@ -49,6 +49,7 @@ class SyncHTTPTransport:
         }
 
     def request(self, method: str, path: str, **kwargs: Any) -> Any:
+        _validate_path(path)
         response = self._client.request(method, path, **kwargs)
         self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
@@ -59,6 +60,7 @@ class SyncHTTPTransport:
     def request_page(
         self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None
     ) -> CursorPage[Any]:
+        _validate_path(path)
         response = self._client.get(path, params=params)
         self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
@@ -70,6 +72,7 @@ class SyncHTTPTransport:
 
     def request_list(self, path: str, model_cls: Type[BaseModel], params: dict[str, Any] | None = None) -> list[Any]:
         """Fetch an endpoint that returns a plain JSON array (no pagination wrapper)."""
+        _validate_path(path)
         response = self._client.get(path, params=params)
         self._extract_rate_limit_headers(response)
         self._raise_for_status(response)
@@ -123,3 +126,10 @@ def _extract_cursor(url: str | None) -> str | None:
         if values:
             return values[0]
     return None
+
+
+def _validate_path(path: str) -> None:
+    if not path.startswith("/"):
+        raise ValueError("Path must start with '/' and be a relative API path.")
+    if path.startswith("//") or "\n" in path or "\r" in path:
+        raise ValueError("Invalid path format.")
