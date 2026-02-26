@@ -77,6 +77,75 @@ def test_list_datasets_with_pagination():
 
 
 @respx.mock
+def test_create_dataset():
+    """Datasets.create() sends a POST and returns a Dataset."""
+    respx.post(f"{BASE_URL}/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "new-dataset-uid",
+                "name": "New Dataset",
+                "slug": "new-dataset",
+                "item_count": 0,
+                "data_type": "lidar",
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    dataset = client.datasets.create(
+        name="New Dataset",
+        slug="new-dataset",
+        data_type="lidar",
+        is_sequence=True,
+        visibility="private",
+    )
+    assert dataset.uid == "new-dataset-uid"
+    assert dataset.name == "New Dataset"
+    client.close()
+
+
+@respx.mock
+def test_create_dataset_with_provider_config():
+    """Datasets.create() includes provider_config and owner_name in the payload."""
+    route = respx.post(f"{BASE_URL}/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "s3-dataset-uid",
+                "name": "S3 Dataset",
+                "slug": "s3-dataset",
+                "item_count": 0,
+                "data_type": "image",
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    dataset = client.datasets.create(
+        name="S3 Dataset",
+        slug="s3-dataset",
+        data_type="image",
+        provider_config={
+            "provider": "aws_s3",
+            "s3_bucket_name": "my-bucket",
+            "s3_bucket_region": "us-east-1",
+        },
+        owner_name="my-org",
+    )
+    assert dataset.uid == "s3-dataset-uid"
+    assert route.called
+    # Verify request body
+    import json
+
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert body["name"] == "S3 Dataset"
+    assert body["data_type"] == "image"
+    assert body["provider_config"]["provider"] == "aws_s3"
+    assert body["owner_name"] == "my-org"
+    client.close()
+
+
+@respx.mock
 def test_list_items():
     """Datasets.list_items() returns a CursorPage of DatasetItem objects."""
     owner = "test-org"
