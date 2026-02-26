@@ -254,6 +254,7 @@ class TestResponseShapesMatchContract:
     @pytest.mark.parametrize(
         "endpoint_key",
         [
+            "datasets.create",
             "organizations.update_team",
             "organizations.add_team_member",
         ],

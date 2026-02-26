@@ -168,6 +168,62 @@ def test_tasks_list():
     assert "Box Task" in result.output
 
 
+@respx.mock
+def test_datasets_create():
+    respx.post("https://api.avala.ai/api/v1/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "new-ds-uid",
+                "name": "New Dataset",
+                "slug": "new-dataset",
+                "item_count": 0,
+                "data_type": "lidar",
+            },
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["--api-key", "test-key", "datasets", "create", "--name", "New Dataset", "--slug", "new-dataset", "--data-type", "lidar"],
+    )
+    assert result.exit_code == 0
+    assert "new-ds-uid" in result.output
+    assert "New Dataset" in result.output
+
+
+@respx.mock
+def test_datasets_create_with_provider_config():
+    respx.post("https://api.avala.ai/api/v1/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "s3-ds-uid",
+                "name": "S3 Dataset",
+                "slug": "s3-dataset",
+                "item_count": 0,
+                "data_type": "image",
+            },
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--api-key", "test-key",
+            "datasets", "create",
+            "--name", "S3 Dataset",
+            "--slug", "s3-dataset",
+            "--data-type", "image",
+            "--is-sequence",
+            "--provider-config", '{"provider": "aws_s3", "s3_bucket_name": "my-bucket"}',
+            "--owner", "my-org",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "s3-ds-uid" in result.output
+
+
 def test_missing_api_key():
     runner = CliRunner(env={"AVALA_API_KEY": ""})
     result = runner.invoke(main, ["datasets", "list"])
