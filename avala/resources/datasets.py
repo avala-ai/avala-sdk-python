@@ -10,8 +10,25 @@ from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
 
 
 class Datasets(BaseSyncResource):
-    def list(self, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[Dataset]:
+    def list(
+        self,
+        *,
+        data_type: str | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        visibility: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> CursorPage[Dataset]:
         params: dict[str, Any] = {}
+        if data_type is not None:
+            params["data_type"] = data_type
+        if name is not None:
+            params["name"] = name
+        if status is not None:
+            params["status"] = status
+        if visibility is not None:
+            params["visibility"] = visibility
         if limit is not None:
             params["limit"] = limit
         if cursor is not None:
@@ -81,8 +98,25 @@ class Datasets(BaseSyncResource):
 
 
 class AsyncDatasets(BaseAsyncResource):
-    async def list(self, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[Dataset]:
+    async def list(
+        self,
+        *,
+        data_type: str | None = None,
+        name: str | None = None,
+        status: str | None = None,
+        visibility: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> CursorPage[Dataset]:
         params: dict[str, Any] = {}
+        if data_type is not None:
+            params["data_type"] = data_type
+        if name is not None:
+            params["name"] = name
+        if status is not None:
+            params["status"] = status
+        if visibility is not None:
+            params["visibility"] = visibility
         if limit is not None:
             params["limit"] = limit
         if cursor is not None:

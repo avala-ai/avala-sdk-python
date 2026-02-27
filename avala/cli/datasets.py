@@ -15,12 +15,23 @@ def datasets() -> None:
 
 
 @datasets.command("list")
+@click.option("--data-type", type=str, default=None, help="Filter by data type (image, video, lidar, mcap, splat)")
+@click.option("--name", type=str, default=None, help="Filter by name (case-insensitive substring match)")
+@click.option("--status", type=str, default=None, help="Filter by status (creating, created)")
+@click.option("--visibility", type=str, default=None, help="Filter by visibility (private, public)")
 @click.option("--limit", type=int, default=None, help="Maximum number of results")
 @click.pass_context
-def list_datasets(ctx: click.Context, limit: int | None) -> None:
+def list_datasets(
+    ctx: click.Context,
+    data_type: str | None,
+    name: str | None,
+    status: str | None,
+    visibility: str | None,
+    limit: int | None,
+) -> None:
     """List datasets."""
     client = ctx.obj["client"]
-    page = client.datasets.list(limit=limit)
+    page = client.datasets.list(data_type=data_type, name=name, status=status, visibility=visibility, limit=limit)
     rows = [(d.uid, d.name, d.slug, str(d.item_count), d.data_type or "—") for d in page.items]
     print_table("Datasets", ["UID", "Name", "Slug", "Items", "Type"], rows)
 
@@ -52,7 +63,7 @@ def get_dataset(ctx: click.Context, uid: str) -> None:
 @click.option(
     "--data-type",
     required=True,
-    type=click.Choice(["image", "video", "lidar", "mcap"]),
+    type=click.Choice(["image", "video", "lidar", "mcap", "splat"]),
     help="Type of data in the dataset",
 )
 @click.option("--is-sequence", is_flag=True, default=False, help="Dataset contains sequences")

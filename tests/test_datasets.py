@@ -37,6 +37,39 @@ def test_list_datasets():
 
 
 @respx.mock
+def test_list_datasets_with_filters():
+    """Datasets.list() sends filter query params to the API."""
+    route = respx.get(f"{BASE_URL}/datasets/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "uid": "550e8400-e29b-41d4-a716-446655440000",
+                        "name": "Highway MCAP",
+                        "slug": "highway-mcap",
+                        "item_count": 50,
+                        "data_type": "mcap",
+                    }
+                ],
+                "next": None,
+                "previous": None,
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    page = client.datasets.list(data_type="mcap", name="highway", status="created", visibility="private")
+    assert len(page.items) == 1
+    assert route.called
+    request = route.calls[0].request
+    assert request.url.params["data_type"] == "mcap"
+    assert request.url.params["name"] == "highway"
+    assert request.url.params["status"] == "created"
+    assert request.url.params["visibility"] == "private"
+    client.close()
+
+
+@respx.mock
 def test_get_dataset():
     uid = "550e8400-e29b-41d4-a716-446655440000"
     respx.get(f"{BASE_URL}/datasets/{uid}/").mock(

@@ -1,5 +1,6 @@
 """Pydantic models for Avala API objects."""
 
+from avala.types.account import SignupResponse, SignupUser
 from avala.types.agent import Agent, AgentExecution
 from avala.types.annotation_issue import (
     AnnotationIssue,
@@ -25,6 +26,8 @@ from avala.types.task import Task
 from avala.types.webhook import Webhook, WebhookDelivery
 
 __all__ = [
+    "SignupResponse",
+    "SignupUser",
     "Agent",
     "AgentExecution",
     "AnnotationIssue",

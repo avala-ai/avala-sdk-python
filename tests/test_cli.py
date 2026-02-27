@@ -39,6 +39,54 @@ def test_datasets_list():
 
 
 @respx.mock
+def test_datasets_list_with_filters():
+    route = respx.get("https://api.avala.ai/api/v1/datasets/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "uid": "abc123",
+                        "name": "Highway MCAP",
+                        "slug": "highway-mcap",
+                        "item_count": 50,
+                        "data_type": "mcap",
+                    }
+                ],
+                "next": None,
+                "previous": None,
+            },
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--api-key",
+            "test-key",
+            "datasets",
+            "list",
+            "--data-type",
+            "mcap",
+            "--name",
+            "highway",
+            "--status",
+            "created",
+            "--visibility",
+            "private",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Highway MCAP" in result.output
+    assert route.called
+    request = route.calls[0].request
+    assert request.url.params["data_type"] == "mcap"
+    assert request.url.params["name"] == "highway"
+    assert request.url.params["status"] == "created"
+    assert request.url.params["visibility"] == "private"
+
+
+@respx.mock
 def test_datasets_get():
     uid = "abc123"
     respx.get(f"https://api.avala.ai/api/v1/datasets/{uid}/").mock(
@@ -185,7 +233,18 @@ def test_datasets_create():
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["--api-key", "test-key", "datasets", "create", "--name", "New Dataset", "--slug", "new-dataset", "--data-type", "lidar"],
+        [
+            "--api-key",
+            "test-key",
+            "datasets",
+            "create",
+            "--name",
+            "New Dataset",
+            "--slug",
+            "new-dataset",
+            "--data-type",
+            "lidar",
+        ],
     )
     assert result.exit_code == 0
     assert "new-ds-uid" in result.output
@@ -210,14 +269,21 @@ def test_datasets_create_with_provider_config():
     result = runner.invoke(
         main,
         [
-            "--api-key", "test-key",
-            "datasets", "create",
-            "--name", "S3 Dataset",
-            "--slug", "s3-dataset",
-            "--data-type", "image",
+            "--api-key",
+            "test-key",
+            "datasets",
+            "create",
+            "--name",
+            "S3 Dataset",
+            "--slug",
+            "s3-dataset",
+            "--data-type",
+            "image",
             "--is-sequence",
-            "--provider-config", '{"provider": "aws_s3", "s3_bucket_name": "my-bucket"}',
-            "--owner", "my-org",
+            "--provider-config",
+            '{"provider": "aws_s3", "s3_bucket_name": "my-bucket"}',
+            "--owner",
+            "my-org",
         ],
     )
     assert result.exit_code == 0
@@ -264,4 +330,8 @@ def test_datasets_list_help():
     runner = CliRunner()
     result = runner.invoke(main, ["datasets", "list", "--help"])
     assert result.exit_code == 0
+    assert "--data-type" in result.output
+    assert "--name" in result.output
+    assert "--status" in result.output
+    assert "--visibility" in result.output
     assert "--limit" in result.output
