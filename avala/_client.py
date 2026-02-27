@@ -10,6 +10,7 @@ from avala.resources.auto_label_jobs import AutoLabelJobs
 from avala.resources.consensus import Consensus
 from avala.resources.datasets import Datasets
 from avala.resources.exports import Exports
+from avala.resources.fleet import Fleet
 from avala.resources.inference_providers import InferenceProviders
 from avala.resources.organizations import Organizations
 from avala.resources.projects import Projects
@@ -44,6 +45,7 @@ class Client:
         self.consensus = Consensus(self._transport)
         self.datasets = Datasets(self._transport)
         self.exports = Exports(self._transport)
+        self.fleet = Fleet(self._transport)
         self.inference_providers = InferenceProviders(self._transport)
         self.organizations = Organizations(self._transport)
         self.projects = Projects(self._transport)

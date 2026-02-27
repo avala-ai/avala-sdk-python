@@ -13,6 +13,7 @@ from avala.resources.auto_label_jobs import AsyncAutoLabelJobs
 from avala.resources.consensus import AsyncConsensus
 from avala.resources.datasets import AsyncDatasets
 from avala.resources.exports import AsyncExports
+from avala.resources.fleet import AsyncFleet
 from avala.resources.inference_providers import AsyncInferenceProviders
 from avala.resources.organizations import AsyncOrganizations
 from avala.resources.projects import AsyncProjects
@@ -47,6 +48,7 @@ class AsyncClient:
         self.consensus = AsyncConsensus(self._transport)
         self.datasets = AsyncDatasets(self._transport)
         self.exports = AsyncExports(self._transport)
+        self.fleet = AsyncFleet(self._transport)
         self.inference_providers = AsyncInferenceProviders(self._transport)
         self.organizations = AsyncOrganizations(self._transport)
         self.projects = AsyncProjects(self._transport)

@@ -6,6 +6,7 @@ from avala.resources.auto_label_jobs import AsyncAutoLabelJobs, AutoLabelJobs
 from avala.resources.consensus import AsyncConsensus, Consensus
 from avala.resources.datasets import AsyncDatasets, Datasets
 from avala.resources.exports import AsyncExports, Exports
+from avala.resources.fleet import AsyncFleet, Fleet
 from avala.resources.inference_providers import AsyncInferenceProviders, InferenceProviders
 from avala.resources.organizations import AsyncOrganizations, Organizations
 from avala.resources.projects import AsyncProjects, Projects
@@ -28,6 +29,8 @@ __all__ = [
     "AsyncDatasets",
     "Exports",
     "AsyncExports",
+    "Fleet",
+    "AsyncFleet",
     "InferenceProviders",
     "AsyncInferenceProviders",
     "Organizations",

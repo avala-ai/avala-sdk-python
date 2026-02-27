@@ -16,6 +16,7 @@ from avala.types.auto_label_job import AutoLabelJob
 from avala.types.consensus import ConsensusComputeResult, ConsensusConfig, ConsensusScore, ConsensusSummary
 from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
 from avala.types.export import Export
+from avala.types.fleet import Alert, AlertChannel, Device, FleetEvent, Recording, Rule
 from avala.types.inference_provider import InferenceProvider
 from avala.types.organization import Invitation, Organization, OrganizationMember, Team, TeamMember
 from avala.types.project import Project
@@ -46,12 +47,18 @@ __all__ = [
     "Dataset",
     "DatasetItem",
     "DatasetSequence",
+    "Alert",
+    "AlertChannel",
+    "Device",
     "Export",
+    "FleetEvent",
     "InferenceProvider",
     "Invitation",
     "Organization",
     "OrganizationMember",
     "Project",
+    "Recording",
+    "Rule",
     "QualityTarget",
     "QualityTargetEvaluation",
     "Slice",
