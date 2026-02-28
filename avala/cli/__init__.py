@@ -43,6 +43,7 @@ from avala.cli.configure import configure  # noqa: E402
 from avala.cli.consensus import consensus  # noqa: E402
 from avala.cli.datasets import datasets  # noqa: E402
 from avala.cli.exports import exports  # noqa: E402
+from avala.cli.fleet import fleet  # noqa: E402
 from avala.cli.inference_providers import inference_providers  # noqa: E402
 from avala.cli.projects import projects  # noqa: E402
 from avala.cli.quality_targets import quality_targets  # noqa: E402
@@ -56,6 +57,7 @@ main.add_command(configure)
 main.add_command(consensus)
 main.add_command(datasets)
 main.add_command(exports)
+main.add_command(fleet)
 main.add_command(inference_providers)
 main.add_command(projects)
 main.add_command(quality_targets)
