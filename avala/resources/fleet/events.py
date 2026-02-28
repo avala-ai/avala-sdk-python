@@ -71,7 +71,7 @@ class FleetEvents(BaseSyncResource):
 
     def create_batch(self, *, events: List[BatchEventParams]) -> int:
         data = self._transport.request("POST", "/fleet/events/batch/", json={"events": events})
-        return data["created"]
+        return int(data["created"])
 
     def get(self, event_id: str) -> FleetEvent:
         data = self._transport.request("GET", f"/fleet/events/{event_id}/")
@@ -143,7 +143,7 @@ class AsyncFleetEvents(BaseAsyncResource):
 
     async def create_batch(self, *, events: List[BatchEventParams]) -> int:
         data = await self._transport.request("POST", "/fleet/events/batch/", json={"events": events})
-        return data["created"]
+        return int(data["created"])
 
     async def get(self, event_id: str) -> FleetEvent:
         data = await self._transport.request("GET", f"/fleet/events/{event_id}/")
