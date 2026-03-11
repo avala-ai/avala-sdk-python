@@ -50,6 +50,11 @@ class Datasets(BaseSyncResource):
         create_metadata: bool = True,
         provider_config: dict[str, Any] | None = None,
         owner_name: str | None = None,
+        organization_id: int | None = None,
+        gpu_texture_format: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        industry: int | None = None,
+        license: int | None = None,
     ) -> Dataset:
         payload: dict[str, Any] = {
             "name": name,
@@ -63,6 +68,16 @@ class Datasets(BaseSyncResource):
             payload["provider_config"] = provider_config
         if owner_name is not None:
             payload["owner_name"] = owner_name
+        if organization_id is not None:
+            payload["organization_id"] = organization_id
+        if gpu_texture_format is not None:
+            payload["gpu_texture_format"] = gpu_texture_format
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if industry is not None:
+            payload["industry"] = industry
+        if license is not None:
+            payload["license"] = license
         data = self._transport.request("POST", "/datasets/", json=payload)
         return Dataset.model_validate(data)
 
@@ -138,6 +153,11 @@ class AsyncDatasets(BaseAsyncResource):
         create_metadata: bool = True,
         provider_config: dict[str, Any] | None = None,
         owner_name: str | None = None,
+        organization_id: int | None = None,
+        gpu_texture_format: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        industry: int | None = None,
+        license: int | None = None,
     ) -> Dataset:
         payload: dict[str, Any] = {
             "name": name,
@@ -151,6 +171,16 @@ class AsyncDatasets(BaseAsyncResource):
             payload["provider_config"] = provider_config
         if owner_name is not None:
             payload["owner_name"] = owner_name
+        if organization_id is not None:
+            payload["organization_id"] = organization_id
+        if gpu_texture_format is not None:
+            payload["gpu_texture_format"] = gpu_texture_format
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if industry is not None:
+            payload["industry"] = industry
+        if license is not None:
+            payload["license"] = license
         data = await self._transport.request("POST", "/datasets/", json=payload)
         return Dataset.model_validate(data)
 

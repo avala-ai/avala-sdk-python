@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import respx
 
@@ -166,15 +168,51 @@ def test_create_dataset_with_provider_config():
     )
     assert dataset.uid == "s3-dataset-uid"
     assert route.called
-    # Verify request body
-    import json
-
     request = route.calls[0].request
     body = json.loads(request.content)
     assert body["name"] == "S3 Dataset"
     assert body["data_type"] == "image"
     assert body["provider_config"]["provider"] == "aws_s3"
     assert body["owner_name"] == "my-org"
+    client.close()
+
+
+@respx.mock
+def test_create_dataset_with_organization_id():
+    """Datasets.create() includes organization_id and other optional fields in the payload."""
+    route = respx.post(f"{BASE_URL}/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "org-dataset-uid",
+                "name": "Org Dataset",
+                "slug": "org-dataset",
+                "item_count": 0,
+                "data_type": "lidar",
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    dataset = client.datasets.create(
+        name="Org Dataset",
+        slug="org-dataset",
+        data_type="lidar",
+        is_sequence=True,
+        organization_id=265,
+        gpu_texture_format="ktx",
+        industry=265,
+        license=67,
+        metadata={"key": "value"},
+    )
+    assert dataset.uid == "org-dataset-uid"
+    assert route.called
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert body["organization_id"] == 265
+    assert body["gpu_texture_format"] == "ktx"
+    assert body["industry"] == 265
+    assert body["license"] == 67
+    assert body["metadata"] == {"key": "value"}
     client.close()
 
 
