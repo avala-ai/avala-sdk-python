@@ -13,6 +13,7 @@ class StorageConfig(BaseModel):
     s3_bucket_name: Optional[str] = None
     s3_bucket_region: Optional[str] = None
     s3_bucket_prefix: Optional[str] = None
+    s3_auth_method: Optional[str] = None
     s3_is_accelerated: bool = False
     gc_storage_bucket_name: Optional[str] = None
     gc_storage_prefix: Optional[str] = None
@@ -20,3 +21,8 @@ class StorageConfig(BaseModel):
     last_verified_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class StorageConfigSetupInfo(BaseModel):
+    avala_aws_account_id: str
+    external_id: str

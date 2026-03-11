@@ -6,7 +6,7 @@ from typing import Any
 
 from avala._pagination import CursorPage
 from avala.resources._base import BaseAsyncResource, BaseSyncResource
-from avala.types.storage_config import StorageConfig
+from avala.types.storage_config import StorageConfig, StorageConfigSetupInfo
 
 
 class StorageConfigs(BaseSyncResource):
@@ -26,6 +26,8 @@ class StorageConfigs(BaseSyncResource):
         s3_bucket_name: str | None = None,
         s3_bucket_region: str | None = None,
         s3_bucket_prefix: str | None = None,
+        s3_auth_method: str | None = None,
+        s3_role_arn: str | None = None,
         s3_access_key_id: str | None = None,
         s3_secret_access_key: str | None = None,
         s3_is_accelerated: bool | None = None,
@@ -40,6 +42,10 @@ class StorageConfigs(BaseSyncResource):
             payload["s3_bucket_region"] = s3_bucket_region
         if s3_bucket_prefix is not None:
             payload["s3_bucket_prefix"] = s3_bucket_prefix
+        if s3_auth_method is not None:
+            payload["s3_auth_method"] = s3_auth_method
+        if s3_role_arn is not None:
+            payload["s3_role_arn"] = s3_role_arn
         if s3_access_key_id is not None:
             payload["s3_access_key_id"] = s3_access_key_id
         if s3_secret_access_key is not None:
@@ -54,6 +60,10 @@ class StorageConfigs(BaseSyncResource):
             payload["gc_storage_auth_json_content"] = gc_storage_auth_json_content
         data = self._transport.request("POST", "/storage-configs/", json=payload)
         return StorageConfig.model_validate(data)
+
+    def setup_info(self) -> StorageConfigSetupInfo:
+        data = self._transport.request("GET", "/storage-configs/setup-info/")
+        return StorageConfigSetupInfo.model_validate(data)
 
     def test(self, uid: str) -> dict[str, Any]:
         data = self._transport.request("POST", f"/storage-configs/{uid}/test/")
@@ -80,6 +90,8 @@ class AsyncStorageConfigs(BaseAsyncResource):
         s3_bucket_name: str | None = None,
         s3_bucket_region: str | None = None,
         s3_bucket_prefix: str | None = None,
+        s3_auth_method: str | None = None,
+        s3_role_arn: str | None = None,
         s3_access_key_id: str | None = None,
         s3_secret_access_key: str | None = None,
         s3_is_accelerated: bool | None = None,
@@ -94,6 +106,10 @@ class AsyncStorageConfigs(BaseAsyncResource):
             payload["s3_bucket_region"] = s3_bucket_region
         if s3_bucket_prefix is not None:
             payload["s3_bucket_prefix"] = s3_bucket_prefix
+        if s3_auth_method is not None:
+            payload["s3_auth_method"] = s3_auth_method
+        if s3_role_arn is not None:
+            payload["s3_role_arn"] = s3_role_arn
         if s3_access_key_id is not None:
             payload["s3_access_key_id"] = s3_access_key_id
         if s3_secret_access_key is not None:
@@ -108,6 +124,10 @@ class AsyncStorageConfigs(BaseAsyncResource):
             payload["gc_storage_auth_json_content"] = gc_storage_auth_json_content
         data = await self._transport.request("POST", "/storage-configs/", json=payload)
         return StorageConfig.model_validate(data)
+
+    async def setup_info(self) -> StorageConfigSetupInfo:
+        data = await self._transport.request("GET", "/storage-configs/setup-info/")
+        return StorageConfigSetupInfo.model_validate(data)
 
     async def test(self, uid: str) -> dict[str, Any]:
         data = await self._transport.request("POST", f"/storage-configs/{uid}/test/")
