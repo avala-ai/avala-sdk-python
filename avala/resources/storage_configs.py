@@ -10,12 +10,16 @@ from avala.types.storage_config import StorageConfig, StorageConfigSetupInfo
 
 
 class StorageConfigs(BaseSyncResource):
-    def list(self, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[StorageConfig]:
+    def list(
+        self, *, limit: int | None = None, cursor: str | None = None, organization: str | None = None
+    ) -> CursorPage[StorageConfig]:
         params: dict[str, Any] = {}
         if limit is not None:
             params["limit"] = limit
         if cursor is not None:
             params["cursor"] = cursor
+        if organization is not None:
+            params["organization"] = organization
         return self._transport.request_page("/storage-configs/", StorageConfig, params=params or None)
 
     def create(
@@ -23,6 +27,7 @@ class StorageConfigs(BaseSyncResource):
         *,
         name: str,
         provider: str,
+        organization: str | None = None,
         s3_bucket_name: str | None = None,
         s3_bucket_region: str | None = None,
         s3_bucket_prefix: str | None = None,
@@ -35,6 +40,9 @@ class StorageConfigs(BaseSyncResource):
         gc_storage_prefix: str | None = None,
         gc_storage_auth_json_content: str | None = None,
     ) -> StorageConfig:
+        params: dict[str, Any] = {}
+        if organization is not None:
+            params["organization"] = organization
         payload: dict[str, Any] = {"name": name, "provider": provider}
         if s3_bucket_name is not None:
             payload["s3_bucket_name"] = s3_bucket_name
@@ -58,11 +66,14 @@ class StorageConfigs(BaseSyncResource):
             payload["gc_storage_prefix"] = gc_storage_prefix
         if gc_storage_auth_json_content is not None:
             payload["gc_storage_auth_json_content"] = gc_storage_auth_json_content
-        data = self._transport.request("POST", "/storage-configs/", json=payload)
+        data = self._transport.request("POST", "/storage-configs/", json=payload, params=params or None)
         return StorageConfig.model_validate(data)
 
-    def setup_info(self) -> StorageConfigSetupInfo:
-        data = self._transport.request("GET", "/storage-configs/setup-info/")
+    def setup_info(self, *, organization: str | None = None) -> StorageConfigSetupInfo:
+        params: dict[str, Any] = {}
+        if organization is not None:
+            params["organization"] = organization
+        data = self._transport.request("GET", "/storage-configs/setup-info/", params=params or None)
         return StorageConfigSetupInfo.model_validate(data)
 
     def test(self, uid: str) -> dict[str, Any]:
@@ -74,12 +85,16 @@ class StorageConfigs(BaseSyncResource):
 
 
 class AsyncStorageConfigs(BaseAsyncResource):
-    async def list(self, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[StorageConfig]:
+    async def list(
+        self, *, limit: int | None = None, cursor: str | None = None, organization: str | None = None
+    ) -> CursorPage[StorageConfig]:
         params: dict[str, Any] = {}
         if limit is not None:
             params["limit"] = limit
         if cursor is not None:
             params["cursor"] = cursor
+        if organization is not None:
+            params["organization"] = organization
         return await self._transport.request_page("/storage-configs/", StorageConfig, params=params or None)
 
     async def create(
@@ -87,6 +102,7 @@ class AsyncStorageConfigs(BaseAsyncResource):
         *,
         name: str,
         provider: str,
+        organization: str | None = None,
         s3_bucket_name: str | None = None,
         s3_bucket_region: str | None = None,
         s3_bucket_prefix: str | None = None,
@@ -99,6 +115,9 @@ class AsyncStorageConfigs(BaseAsyncResource):
         gc_storage_prefix: str | None = None,
         gc_storage_auth_json_content: str | None = None,
     ) -> StorageConfig:
+        params: dict[str, Any] = {}
+        if organization is not None:
+            params["organization"] = organization
         payload: dict[str, Any] = {"name": name, "provider": provider}
         if s3_bucket_name is not None:
             payload["s3_bucket_name"] = s3_bucket_name
@@ -122,11 +141,14 @@ class AsyncStorageConfigs(BaseAsyncResource):
             payload["gc_storage_prefix"] = gc_storage_prefix
         if gc_storage_auth_json_content is not None:
             payload["gc_storage_auth_json_content"] = gc_storage_auth_json_content
-        data = await self._transport.request("POST", "/storage-configs/", json=payload)
+        data = await self._transport.request("POST", "/storage-configs/", json=payload, params=params or None)
         return StorageConfig.model_validate(data)
 
-    async def setup_info(self) -> StorageConfigSetupInfo:
-        data = await self._transport.request("GET", "/storage-configs/setup-info/")
+    async def setup_info(self, *, organization: str | None = None) -> StorageConfigSetupInfo:
+        params: dict[str, Any] = {}
+        if organization is not None:
+            params["organization"] = organization
+        data = await self._transport.request("GET", "/storage-configs/setup-info/", params=params or None)
         return StorageConfigSetupInfo.model_validate(data)
 
     async def test(self, uid: str) -> dict[str, Any]:
