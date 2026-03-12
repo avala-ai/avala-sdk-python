@@ -140,29 +140,33 @@ def test_list_members():
 
 @respx.mock
 def test_list_teams():
-    """Organizations.list_teams() returns a list of Team objects (non-paginated)."""
+    """Organizations.list_teams() returns a CursorPage of Team objects."""
     slug = "test-org"
     respx.get(f"{BASE_URL}/organizations/{slug}/teams/").mock(
         return_value=httpx.Response(
             200,
-            json=[
-                {
-                    "uid": "team-001",
-                    "name": "Engineering",
-                    "slug": "engineering",
-                    "description": "Engineering team",
-                    "member_count": 3,
-                }
-            ],
+            json={
+                "results": [
+                    {
+                        "uid": "team-001",
+                        "name": "Engineering",
+                        "slug": "engineering",
+                        "description": "Engineering team",
+                        "member_count": 3,
+                    }
+                ],
+                "next": None,
+                "previous": None,
+            },
         )
     )
     client = Client(api_key="test-key")
-    teams = client.organizations.list_teams(slug)
-    assert len(teams) == 1
-    assert teams[0].uid == "team-001"
-    assert teams[0].name == "Engineering"
-    assert teams[0].slug == "engineering"
-    assert teams[0].member_count == 3
+    page = client.organizations.list_teams(slug)
+    assert len(page.items) == 1
+    assert page.items[0].uid == "team-001"
+    assert page.items[0].name == "Engineering"
+    assert page.items[0].slug == "engineering"
+    assert page.items[0].member_count == 3
     client.close()
 
 

@@ -28,6 +28,7 @@ class Organization(BaseModel):
     slice_count: Optional[int] = None
     role: Optional[str] = None
     joined_at: Optional[datetime] = None
+    slug_edits_remaining: Optional[int] = None
     allowed_domains: Optional[List[str]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

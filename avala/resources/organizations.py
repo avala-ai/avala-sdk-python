@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from avala._pagination import CursorPage
 from avala.resources._base import BaseAsyncResource, BaseSyncResource
@@ -137,8 +137,15 @@ class Organizations(BaseSyncResource):
 
     # ── Invitations ──────────────────────────────────────────
 
-    def list_invitations(self, slug: str) -> List[Invitation]:
-        return self._transport.request_list(f"/organizations/{slug}/invitations/", Invitation)
+    def list_invitations(
+        self, slug: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> CursorPage[Invitation]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        return self._transport.request_page(f"/organizations/{slug}/invitations/", Invitation, params=params or None)
 
     def create_invitation(self, slug: str, *, email: str, role: str | None = None) -> Invitation:
         payload: dict[str, Any] = {"email": email}
@@ -155,8 +162,13 @@ class Organizations(BaseSyncResource):
 
     # ── Teams ────────────────────────────────────────────────
 
-    def list_teams(self, slug: str) -> List[Team]:
-        return self._transport.request_list(f"/organizations/{slug}/teams/", Team)
+    def list_teams(self, slug: str, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[Team]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        return self._transport.request_page(f"/organizations/{slug}/teams/", Team, params=params or None)
 
     def create_team(self, slug: str, *, name: str, description: str | None = None, color: str | None = None) -> Team:
         payload: dict[str, Any] = {"name": name}
@@ -195,8 +207,17 @@ class Organizations(BaseSyncResource):
 
     # ── Team Members ─────────────────────────────────────────
 
-    def list_team_members(self, slug: str, team_slug: str) -> List[TeamMember]:
-        return self._transport.request_list(f"/organizations/{slug}/teams/{team_slug}/members/", TeamMember)
+    def list_team_members(
+        self, slug: str, team_slug: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> CursorPage[TeamMember]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        return self._transport.request_page(
+            f"/organizations/{slug}/teams/{team_slug}/members/", TeamMember, params=params or None
+        )
 
     def add_team_member(self, slug: str, team_slug: str, *, user_uid: str, role: str | None = None) -> TeamMember:
         payload: dict[str, Any] = {"user_uid": user_uid}
@@ -342,8 +363,17 @@ class AsyncOrganizations(BaseAsyncResource):
 
     # ── Invitations ──────────────────────────────────────────
 
-    async def list_invitations(self, slug: str) -> List[Invitation]:
-        return await self._transport.request_list(f"/organizations/{slug}/invitations/", Invitation)
+    async def list_invitations(
+        self, slug: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> CursorPage[Invitation]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        return await self._transport.request_page(
+            f"/organizations/{slug}/invitations/", Invitation, params=params or None
+        )
 
     async def create_invitation(self, slug: str, *, email: str, role: str | None = None) -> Invitation:
         payload: dict[str, Any] = {"email": email}
@@ -360,8 +390,13 @@ class AsyncOrganizations(BaseAsyncResource):
 
     # ── Teams ────────────────────────────────────────────────
 
-    async def list_teams(self, slug: str) -> List[Team]:
-        return await self._transport.request_list(f"/organizations/{slug}/teams/", Team)
+    async def list_teams(self, slug: str, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[Team]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        return await self._transport.request_page(f"/organizations/{slug}/teams/", Team, params=params or None)
 
     async def create_team(
         self, slug: str, *, name: str, description: str | None = None, color: str | None = None
@@ -402,8 +437,17 @@ class AsyncOrganizations(BaseAsyncResource):
 
     # ── Team Members ─────────────────────────────────────────
 
-    async def list_team_members(self, slug: str, team_slug: str) -> List[TeamMember]:
-        return await self._transport.request_list(f"/organizations/{slug}/teams/{team_slug}/members/", TeamMember)
+    async def list_team_members(
+        self, slug: str, team_slug: str, *, limit: int | None = None, cursor: str | None = None
+    ) -> CursorPage[TeamMember]:
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if cursor is not None:
+            params["cursor"] = cursor
+        return await self._transport.request_page(
+            f"/organizations/{slug}/teams/{team_slug}/members/", TeamMember, params=params or None
+        )
 
     async def add_team_member(self, slug: str, team_slug: str, *, user_uid: str, role: str | None = None) -> TeamMember:
         payload: dict[str, Any] = {"user_uid": user_uid}
