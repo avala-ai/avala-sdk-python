@@ -11,6 +11,7 @@ class Dataset(BaseModel):
     name: str
     slug: str
     item_count: int = 0
+    status: Optional[str] = None
     data_type: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
