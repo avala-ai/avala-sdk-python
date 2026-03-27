@@ -28,7 +28,12 @@ def list_storage_configs(ctx: click.Context) -> None:
         )
         for sc in page.items
     ]
-    print_table("Storage Configs", ["UID", "Name", "Provider", "Verified", "Created"], rows)
+    print_table(
+        "Storage Configs",
+        ["UID", "Name", "Provider", "Verified", "Created"],
+        rows,
+        json_keys=["uid", "name", "provider", "is_verified", "created_at"],
+    )
 
 
 @storage_configs.command("create")

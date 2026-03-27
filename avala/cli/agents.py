@@ -23,7 +23,12 @@ def list_agents(ctx: click.Context, limit: int | None) -> None:
         (a.uid, a.name, "Yes" if a.is_active else "No", ", ".join(a.events), str(a.created_at or "—"))
         for a in page.items
     ]
-    print_table("Agents", ["UID", "Name", "Active", "Events", "Created"], rows)
+    print_table(
+        "Agents",
+        ["UID", "Name", "Active", "Events", "Created"],
+        rows,
+        json_keys=["uid", "name", "is_active", "events", "created_at"],
+    )
 
 
 @agents.command("get")
@@ -46,6 +51,18 @@ def get_agent(ctx: click.Context, uid: str) -> None:
             ("Task Types", ", ".join(a.task_types) if a.task_types else "—"),
             ("Created", str(a.created_at or "—")),
             ("Updated", str(a.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "name",
+            "description",
+            "events",
+            "callback_url",
+            "is_active",
+            "project",
+            "task_types",
+            "created_at",
+            "updated_at",
         ],
     )
 
@@ -107,7 +124,12 @@ def list_executions(ctx: click.Context, uid: str, limit: int | None) -> None:
     client = ctx.obj["client"]
     page = client.agents.list_executions(uid, limit=limit)
     rows = [(e.uid, e.event_type, e.status or "—", e.action or "—", str(e.created_at or "—")) for e in page.items]
-    print_table("Agent Executions", ["UID", "Event", "Status", "Action", "Created"], rows)
+    print_table(
+        "Agent Executions",
+        ["UID", "Event", "Status", "Action", "Created"],
+        rows,
+        json_keys=["uid", "event_type", "status", "action", "created_at"],
+    )
 
 
 @agents.command("test")

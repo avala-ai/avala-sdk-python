@@ -20,7 +20,7 @@ Requires Python 3.9+.
 ## Quick Start
 
 ```python
-from avala import Client
+from avala import Client  # or: from avala import Avala
 
 client = Client()  # reads AVALA_API_KEY env var
 
@@ -32,9 +32,10 @@ for dataset in page:
 # Get a specific dataset
 dataset = client.datasets.get("dataset-uid")
 
-# Create an export
+# Create an export and wait for completion
 export = client.exports.create(project="project-uid")
-print(export.uid, export.status)
+finished = client.exports.wait(export.uid)  # polls until done
+print(finished.download_url)
 
 # List tasks with filters
 tasks = client.tasks.list(project="project-uid", status="completed")
@@ -99,24 +100,29 @@ except AvalaError as e:
 
 ## CLI Tool
 
-Install with CLI extras for a command-line interface:
+Install the CLI with one command:
+
+```bash
+curl -fsSL https://avala.ai/install.sh | bash
+```
+
+Or install directly with pip:
 
 ```bash
 pip install avala[cli]
 ```
 
 ```bash
-avala configure                    # Interactive API key setup
-avala datasets list                # List datasets
-avala projects list                # List projects
-avala exports create <project-uid> # Create an export
-avala storage-configs list         # List storage configs
-avala agents list                  # List automation agents
-avala inference-providers list     # List inference providers
-avala auto-label list              # List auto-label jobs
-avala quality-targets list -p <uid> # List quality targets
-avala consensus summary -p <uid>   # Get consensus summary
-avala webhooks list                # List webhook subscriptions
+avala configure                       # Interactive API key setup + validation
+avala status                          # Organization dashboard overview
+avala datasets list                   # List datasets
+avala projects list                   # List projects
+avala exports create --project <uid>  # Create an export
+avala exports wait <uid>              # Poll until export completes
+avala fleet devices list              # List fleet devices
+avala -o json datasets list | jq .    # JSON output for scripting
+avala shell-completion zsh >> ~/.zshrc # Enable tab completion
+avala --version                       # Show CLI version
 ```
 
 ## Available Resources
@@ -125,7 +131,7 @@ avala webhooks list                # List webhook subscriptions
 |----------|---------|-------------|
 | `client.datasets` | `list()`, `get(uid)` | Browse and inspect datasets |
 | `client.projects` | `list()`, `get(uid)` | Browse and inspect projects |
-| `client.exports` | `list()`, `get(uid)`, `create()` | Create and manage annotation exports |
+| `client.exports` | `list()`, `get(uid)`, `create()`, `wait(uid)` | Create, poll, and manage annotation exports |
 | `client.tasks` | `list()`, `get(uid)` | Browse tasks with project/status filters |
 | `client.storage_configs` | `list()`, `create()`, `test()`, `delete()` | Manage cloud storage connections |
 | `client.agents` | `list()`, `get()`, `create()`, `update()`, `delete()`, `list_executions()`, `test()` | Manage automation agents |

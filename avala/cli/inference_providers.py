@@ -31,7 +31,12 @@ def list_inference_providers(ctx: click.Context, limit: int | None) -> None:
         )
         for p in page.items
     ]
-    print_table("Inference Providers", ["UID", "Name", "Type", "Active", "Created"], rows)
+    print_table(
+        "Inference Providers",
+        ["UID", "Name", "Type", "Active", "Created"],
+        rows,
+        json_keys=["uid", "name", "provider_type", "is_active", "created_at"],
+    )
 
 
 @inference_providers.command("get")
@@ -55,6 +60,19 @@ def get_inference_provider(ctx: click.Context, uid: str) -> None:
             ("Last Test OK", str(p.last_test_success) if p.last_test_success is not None else "—"),
             ("Created", str(p.created_at or "—")),
             ("Updated", str(p.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "name",
+            "description",
+            "provider_type",
+            "config",
+            "is_active",
+            "project",
+            "last_test_at",
+            "last_test_success",
+            "created_at",
+            "updated_at",
         ],
     )
 

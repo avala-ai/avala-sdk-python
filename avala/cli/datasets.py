@@ -33,7 +33,12 @@ def list_datasets(
     client = ctx.obj["client"]
     page = client.datasets.list(data_type=data_type, name=name, status=status, visibility=visibility, limit=limit)
     rows = [(d.uid, d.name, d.slug, str(d.item_count), d.data_type or "—") for d in page.items]
-    print_table("Datasets", ["UID", "Name", "Slug", "Items", "Type"], rows)
+    print_table(
+        "Datasets",
+        ["UID", "Name", "Slug", "Items", "Type"],
+        rows,
+        json_keys=["uid", "name", "slug", "item_count", "data_type"],
+    )
 
 
 @datasets.command("get")
@@ -54,6 +59,7 @@ def get_dataset(ctx: click.Context, uid: str) -> None:
             ("Created", str(d.created_at or "—")),
             ("Updated", str(d.updated_at or "—")),
         ],
+        json_keys=["uid", "name", "slug", "item_count", "data_type", "created_at", "updated_at"],
     )
 
 

@@ -29,7 +29,12 @@ def list_webhooks(ctx: click.Context, limit: int | None) -> None:
         )
         for w in page.items
     ]
-    print_table("Webhooks", ["UID", "Target URL", "Events", "Active", "Created"], rows)
+    print_table(
+        "Webhooks",
+        ["UID", "Target URL", "Events", "Active", "Created"],
+        rows,
+        json_keys=["uid", "target_url", "events", "is_active", "created_at"],
+    )
 
 
 @webhooks.command("get")
@@ -49,6 +54,7 @@ def get_webhook(ctx: click.Context, uid: str) -> None:
             ("Created", str(w.created_at or "—")),
             ("Updated", str(w.updated_at or "—")),
         ],
+        json_keys=["uid", "target_url", "events", "is_active", "created_at", "updated_at"],
     )
 
 
@@ -118,4 +124,9 @@ def list_deliveries(ctx: click.Context, limit: int | None) -> None:
         )
         for d in page.items
     ]
-    print_table("Webhook Deliveries", ["UID", "Event", "Status", "HTTP Status", "Attempts", "Created"], rows)
+    print_table(
+        "Webhook Deliveries",
+        ["UID", "Event", "Status", "HTTP Status", "Attempts", "Created"],
+        rows,
+        json_keys=["uid", "event_type", "status", "response_status", "attempts", "created_at"],
+    )

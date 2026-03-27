@@ -35,7 +35,12 @@ def list_devices(ctx: click.Context, status: str | None, device_type: str | None
         (d.uid, d.name, d.type or "—", d.status or "—", d.firmware_version or "—", str(d.last_seen_at or "—"))
         for d in page.items
     ]
-    print_table("Devices", ["UID", "Name", "Type", "Status", "Firmware", "Last Seen"], rows)
+    print_table(
+        "Devices",
+        ["UID", "Name", "Type", "Status", "Firmware", "Last Seen"],
+        rows,
+        json_keys=["uid", "name", "type", "status", "firmware_version", "last_seen_at"],
+    )
 
 
 @devices.command("get")
@@ -58,6 +63,18 @@ def get_device(ctx: click.Context, uid: str) -> None:
             ("Device Token", d.device_token or "—"),
             ("Created", str(d.created_at or "—")),
             ("Updated", str(d.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "name",
+            "type",
+            "status",
+            "firmware_version",
+            "tags",
+            "last_seen_at",
+            "device_token",
+            "created_at",
+            "updated_at",
         ],
     )
 
@@ -148,7 +165,12 @@ def list_recordings(ctx: click.Context, device: str | None, status: str | None, 
         )
         for r in page.items
     ]
-    print_table("Recordings", ["UID", "Device", "Status", "Duration (s)", "Topics", "Created"], rows)
+    print_table(
+        "Recordings",
+        ["UID", "Device", "Status", "Duration (s)", "Topics", "Created"],
+        rows,
+        json_keys=["uid", "device", "status", "duration_seconds", "topic_count", "created_at"],
+    )
 
 
 @recordings.command("get")
@@ -172,6 +194,19 @@ def get_recording(ctx: click.Context, uid: str) -> None:
             ("Ended", str(r.ended_at or "—")),
             ("Created", str(r.created_at or "—")),
             ("Updated", str(r.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "device",
+            "status",
+            "duration_seconds",
+            "size_bytes",
+            "topic_count",
+            "tags",
+            "started_at",
+            "ended_at",
+            "created_at",
+            "updated_at",
         ],
     )
 
@@ -200,7 +235,12 @@ def list_events(
         (e.uid, e.type or "—", e.label or "—", e.severity or "—", str(e.timestamp or "—"), str(e.created_at or "—"))
         for e in page.items
     ]
-    print_table("Events", ["UID", "Type", "Label", "Severity", "Timestamp", "Created"], rows)
+    print_table(
+        "Events",
+        ["UID", "Type", "Label", "Severity", "Timestamp", "Created"],
+        rows,
+        json_keys=["uid", "type", "label", "severity", "timestamp", "created_at"],
+    )
 
 
 @events.command("get")
@@ -225,6 +265,20 @@ def get_event(ctx: click.Context, uid: str) -> None:
             ("Tags", ", ".join(e.tags) if e.tags else "—"),
             ("Created", str(e.created_at or "—")),
             ("Updated", str(e.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "recording",
+            "device",
+            "type",
+            "label",
+            "description",
+            "severity",
+            "timestamp",
+            "duration_ms",
+            "tags",
+            "created_at",
+            "updated_at",
         ],
     )
 
@@ -279,7 +333,12 @@ def list_rules(ctx: click.Context, limit: int | None) -> None:
     rows = [
         (r.uid, r.name, "Yes" if r.enabled else "No", str(r.hit_count), str(r.created_at or "—")) for r in page.items
     ]
-    print_table("Rules", ["UID", "Name", "Enabled", "Hits", "Created"], rows)
+    print_table(
+        "Rules",
+        ["UID", "Name", "Enabled", "Hits", "Created"],
+        rows,
+        json_keys=["uid", "name", "enabled", "hit_count", "created_at"],
+    )
 
 
 @rules.command("get")
@@ -303,6 +362,19 @@ def get_rule(ctx: click.Context, uid: str) -> None:
             ("Last Hit", str(r.last_hit_at or "—")),
             ("Created", str(r.created_at or "—")),
             ("Updated", str(r.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "name",
+            "description",
+            "enabled",
+            "condition",
+            "actions",
+            "scope",
+            "hit_count",
+            "last_hit_at",
+            "created_at",
+            "updated_at",
         ],
     )
 
@@ -385,7 +457,12 @@ def list_alerts(ctx: click.Context, status: str | None, severity: str | None, li
         )
         for a in page.items
     ]
-    print_table("Alerts", ["UID", "Severity", "Status", "Message", "Triggered"], rows)
+    print_table(
+        "Alerts",
+        ["UID", "Severity", "Status", "Message", "Triggered"],
+        rows,
+        json_keys=["uid", "severity", "status", "message", "triggered_at"],
+    )
 
 
 @alerts.command("get")
@@ -412,6 +489,22 @@ def get_alert(ctx: click.Context, uid: str) -> None:
             ("Resolution Note", a.resolution_note or "—"),
             ("Created", str(a.created_at or "—")),
             ("Updated", str(a.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "rule",
+            "device",
+            "recording",
+            "severity",
+            "status",
+            "message",
+            "triggered_at",
+            "acknowledged_at",
+            "acknowledged_by",
+            "resolved_at",
+            "resolution_note",
+            "created_at",
+            "updated_at",
         ],
     )
 

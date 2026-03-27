@@ -31,7 +31,12 @@ def list_quality_targets(ctx: click.Context, project: str, limit: int | None) ->
         )
         for t in page.items
     ]
-    print_table("Quality Targets", ["UID", "Name", "Metric", "Threshold", "Breached", "Created"], rows)
+    print_table(
+        "Quality Targets",
+        ["UID", "Name", "Metric", "Threshold", "Breached", "Created"],
+        rows,
+        json_keys=["uid", "name", "metric", "threshold", "is_breached", "created_at"],
+    )
 
 
 @quality_targets.command("get")
@@ -61,6 +66,24 @@ def get_quality_target(ctx: click.Context, project: str, uid: str) -> None:
             ("Last Breached", str(t.last_breached_at or "—")),
             ("Created", str(t.created_at or "—")),
             ("Updated", str(t.updated_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "name",
+            "metric",
+            "operator",
+            "threshold",
+            "severity",
+            "is_active",
+            "notify_webhook",
+            "notify_emails",
+            "last_evaluated_at",
+            "last_value",
+            "is_breached",
+            "breach_count",
+            "last_breached_at",
+            "created_at",
+            "updated_at",
         ],
     )
 
@@ -128,4 +151,5 @@ def evaluate_quality_targets(ctx: click.Context, project: str) -> None:
         "Quality Target Evaluations",
         ["UID", "Name", "Metric", "Threshold", "Current", "Breached", "Severity"],
         rows,
+        json_keys=["uid", "name", "metric", "threshold", "current_value", "is_breached", "severity"],
     )

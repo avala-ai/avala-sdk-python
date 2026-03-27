@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 
+DEFAULT_BASE_URL = "https://api.avala.ai/api/v1"
+
+
 def _is_truthy(value: str | None) -> bool:
     if not value:
         return False
@@ -55,8 +58,8 @@ class ClientConfig:
         resolved_key = api_key or os.environ.get("AVALA_API_KEY", "")
         if not resolved_key:
             raise ValueError("No API key provided. Pass api_key= or set the AVALA_API_KEY environment variable.")
-        resolved_url = base_url or os.environ.get("AVALA_BASE_URL", "https://api.avala.ai/api/v1")
-        resolved_url = _normalize_base_url(resolved_url)
+        _url = base_url or os.environ.get("AVALA_BASE_URL") or DEFAULT_BASE_URL
+        resolved_url = _normalize_base_url(_url)
         return cls(
             api_key=resolved_key,
             base_url=resolved_url,

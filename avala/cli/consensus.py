@@ -29,6 +29,7 @@ def consensus_summary(ctx: click.Context, project: str) -> None:
             ("Total Items", str(s.total_items)),
             ("Items with Consensus", str(s.items_with_consensus)),
         ],
+        json_keys=["mean_score", "median_score", "min_score", "max_score", "total_items", "items_with_consensus"],
     )
 
 
@@ -51,7 +52,12 @@ def consensus_scores(ctx: click.Context, project: str, limit: int | None) -> Non
         )
         for s in page.items
     ]
-    print_table("Consensus Scores", ["UID", "Item", "Task", "Score", "Annotators", "Created"], rows)
+    print_table(
+        "Consensus Scores",
+        ["UID", "Item", "Task", "Score", "Annotators", "Created"],
+        rows,
+        json_keys=["uid", "dataset_item_uid", "task_name", "score", "annotator_count", "created_at"],
+    )
 
 
 @consensus.command("compute")
@@ -101,4 +107,5 @@ def consensus_config(
             ("Created", str(c.created_at or "—")),
             ("Updated", str(c.updated_at or "—")),
         ],
+        json_keys=["uid", "iou_threshold", "min_agreement_ratio", "min_annotations", "created_at", "updated_at"],
     )

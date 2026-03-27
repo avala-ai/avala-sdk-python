@@ -30,7 +30,12 @@ def list_auto_label_jobs(ctx: click.Context, project: str | None, limit: int | N
         )
         for j in page.items
     ]
-    print_table("Auto-Label Jobs", ["UID", "Status", "Model", "Progress", "Created"], rows)
+    print_table(
+        "Auto-Label Jobs",
+        ["UID", "Status", "Model", "Progress", "Created"],
+        rows,
+        json_keys=["uid", "status", "model_type", "progress_pct", "created_at"],
+    )
 
 
 @auto_label.command("get")
@@ -59,6 +64,24 @@ def get_auto_label_job(ctx: click.Context, uid: str) -> None:
             ("Started", str(j.started_at or "—")),
             ("Completed", str(j.completed_at or "—")),
             ("Created", str(j.created_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "status",
+            "model_type",
+            "confidence_threshold",
+            "labels",
+            "dry_run",
+            "total_items",
+            "processed_items",
+            "successful_items",
+            "failed_items",
+            "skipped_items",
+            "progress_pct",
+            "error_message",
+            "started_at",
+            "completed_at",
+            "created_at",
         ],
     )
 

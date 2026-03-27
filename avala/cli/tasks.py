@@ -20,7 +20,12 @@ def list_tasks(ctx: click.Context, limit: int | None) -> None:
     client = ctx.obj["client"]
     page = client.tasks.list(limit=limit)
     rows = [(t.uid, t.name or "—", t.type or "—", t.status or "—", str(t.created_at or "—")) for t in page.items]
-    print_table("Tasks", ["UID", "Name", "Type", "Status", "Created"], rows)
+    print_table(
+        "Tasks",
+        ["UID", "Name", "Type", "Status", "Created"],
+        rows,
+        json_keys=["uid", "name", "type", "status", "created_at"],
+    )
 
 
 @tasks.command("get")
@@ -41,4 +46,5 @@ def get_task(ctx: click.Context, uid: str) -> None:
             ("Created", str(t.created_at or "—")),
             ("Updated", str(t.updated_at or "—")),
         ],
+        json_keys=["uid", "name", "type", "status", "project", "created_at", "updated_at"],
     )
