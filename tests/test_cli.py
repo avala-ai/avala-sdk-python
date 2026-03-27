@@ -561,7 +561,7 @@ def test_status_json():
     result = runner.invoke(main, ["--api-key", "test-key", "-o", "json", "status"])
     assert result.exit_code == 0
     data = _json.loads(result.output)
-    assert data["organization"] == "Acme Robotics"
+    assert data["organizations"][0]["name"] == "Acme Robotics"
     assert len(data["datasets"]["latest"]) == 2
     assert len(data["projects"]["latest"]) == 2
     assert data["exports"]["pending"][0]["uid"] == "exp-1"
