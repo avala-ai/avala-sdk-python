@@ -13,7 +13,7 @@ dependencies = ["httpx>=0.24,<1", "pydantic>=2.0,<3"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "respx>=0.20", "mypy>=1", "ruff>=0.1", "pytest-asyncio>=0.21"]
-cli = ["click>=8.0", "rich>=13.0"]
+cli = ["click>=8.0", "rich>=13.0", "boto3>=1.26", "tqdm>=4.60"]
 
 [project.scripts]
 avala = "avala.cli:main"

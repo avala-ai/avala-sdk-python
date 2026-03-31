@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Any
 
 from avala._pagination import CursorPage
 from avala.resources._base import BaseAsyncResource, BaseSyncResource
 from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
+
+_MIN_INTERVAL = 1.0
 
 
 class Datasets(BaseSyncResource):
@@ -110,6 +114,48 @@ class Datasets(BaseSyncResource):
     def get_sequence(self, owner: str, slug: str, sequence_uid: str) -> DatasetSequence:
         data = self._transport.request("GET", f"/datasets/{owner}/{slug}/sequences/{sequence_uid}/")
         return DatasetSequence.model_validate(data)
+
+    def wait(
+        self,
+        uid: str,
+        *,
+        status: str = "created",
+        interval: float = 10.0,
+        timeout: float = 3600.0,
+        _on_poll: Callable[[Dataset], None] | None = None,
+    ) -> Dataset:
+        """Poll a dataset until it reaches the target status.
+
+        Args:
+            uid: The dataset UID to poll.
+            status: Target status to wait for (default ``"created"``).
+            interval: Seconds between polls (default 10, minimum 1).
+            timeout: Maximum seconds to wait before raising ``TimeoutError`` (default 3600).
+            _on_poll: Optional callback invoked after each non-terminal poll with the current dataset.
+
+        Returns:
+            The Dataset object once it reaches the target status.
+
+        Raises:
+            TimeoutError: If the dataset does not reach the target status within *timeout* seconds.
+        """
+        if timeout < 0:
+            raise ValueError("timeout must be non-negative")
+        if interval < 0:
+            raise ValueError("interval must be non-negative")
+        interval = max(interval, _MIN_INTERVAL)
+        deadline = time.monotonic() + timeout
+        while True:
+            dataset = self.get(uid)
+            if dataset.status == status:
+                return dataset
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Dataset {uid} did not reach status '{status}' within {timeout}s (last status: {dataset.status})"
+                )
+            if _on_poll is not None:
+                _on_poll(dataset)
+            time.sleep(interval)
 
 
 class AsyncDatasets(BaseAsyncResource):
@@ -215,3 +261,48 @@ class AsyncDatasets(BaseAsyncResource):
     async def get_sequence(self, owner: str, slug: str, sequence_uid: str) -> DatasetSequence:
         data = await self._transport.request("GET", f"/datasets/{owner}/{slug}/sequences/{sequence_uid}/")
         return DatasetSequence.model_validate(data)
+
+    async def wait(
+        self,
+        uid: str,
+        *,
+        status: str = "created",
+        interval: float = 10.0,
+        timeout: float = 3600.0,
+        _on_poll: Callable[[Dataset], None] | None = None,
+    ) -> Dataset:
+        """Poll a dataset until it reaches the target status.
+
+        Args:
+            uid: The dataset UID to poll.
+            status: Target status to wait for (default ``"created"``).
+            interval: Seconds between polls (default 10, minimum 1).
+            timeout: Maximum seconds to wait before raising ``TimeoutError`` (default 3600).
+            _on_poll: Optional callback invoked after each non-terminal poll with the current dataset.
+
+        Returns:
+            The Dataset object once it reaches the target status.
+
+        Raises:
+            TimeoutError: If the dataset does not reach the target status within *timeout* seconds.
+        """
+        import asyncio
+
+        if timeout < 0:
+            raise ValueError("timeout must be non-negative")
+        if interval < 0:
+            raise ValueError("interval must be non-negative")
+        interval = max(interval, _MIN_INTERVAL)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            dataset = await self.get(uid)
+            if dataset.status == status:
+                return dataset
+            if loop.time() >= deadline:
+                raise TimeoutError(
+                    f"Dataset {uid} did not reach status '{status}' within {timeout}s (last status: {dataset.status})"
+                )
+            if _on_poll is not None:
+                _on_poll(dataset)
+            await asyncio.sleep(interval)

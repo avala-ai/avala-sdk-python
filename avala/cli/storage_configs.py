@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import click
 
-from avala.cli._output import print_table
+from avala.cli._output import print_detail, print_table
 
 
 @click.group("storage-configs")
@@ -33,6 +33,46 @@ def list_storage_configs(ctx: click.Context) -> None:
         ["UID", "Name", "Provider", "Verified", "Created"],
         rows,
         json_keys=["uid", "name", "provider", "is_verified", "created_at"],
+    )
+
+
+@storage_configs.command("get")
+@click.argument("uid")
+@click.pass_context
+def get_storage_config(ctx: click.Context, uid: str) -> None:
+    """Get a storage configuration by UID."""
+    client = ctx.obj["client"]
+    sc = client.storage_configs.get(uid)
+    print_detail(
+        f"Storage Config: {sc.name}",
+        [
+            ("UID", sc.uid),
+            ("Name", sc.name),
+            ("Provider", sc.provider),
+            ("S3 Bucket", sc.s3_bucket_name or "—"),
+            ("S3 Region", sc.s3_bucket_region or "—"),
+            ("S3 Prefix", sc.s3_bucket_prefix or "—"),
+            ("S3 Accelerated", "Yes" if sc.s3_is_accelerated else "No"),
+            ("Auth Method", sc.s3_auth_method or "—"),
+            ("GCS Bucket", sc.gc_storage_bucket_name or "—"),
+            ("GCS Prefix", sc.gc_storage_prefix or "—"),
+            ("Verified", "Yes" if sc.is_verified else "No"),
+            ("Created", str(sc.created_at or "—")),
+        ],
+        json_keys=[
+            "uid",
+            "name",
+            "provider",
+            "s3_bucket_name",
+            "s3_bucket_region",
+            "s3_bucket_prefix",
+            "s3_is_accelerated",
+            "s3_auth_method",
+            "gc_storage_bucket_name",
+            "gc_storage_prefix",
+            "is_verified",
+            "created_at",
+        ],
     )
 
 

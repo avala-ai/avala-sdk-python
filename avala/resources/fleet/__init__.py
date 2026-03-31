@@ -13,6 +13,7 @@ from avala.resources.fleet.devices import AsyncFleetDevices, FleetDevices
 from avala.resources.fleet.events import AsyncFleetEvents, FleetEvents
 from avala.resources.fleet.recordings import AsyncFleetRecordings, FleetRecordings
 from avala.resources.fleet.rules import AsyncFleetRules, FleetRules
+from avala.resources.fleet.uploads import FleetUploadManager
 
 __all__ = [
     "AsyncFleet",
@@ -28,6 +29,7 @@ class Fleet:
         self.rules = FleetRules(transport)
         self.alerts = FleetAlerts(transport)
         self.alert_channels = FleetAlertChannels(transport)
+        self.uploads = FleetUploadManager(transport)
 
 
 class AsyncFleet:

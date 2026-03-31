@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
 
 import click
 
-from avala.cli._output import print_detail, print_table
+from avala.cli._output import human_bytes, print_detail, print_table
 
 
 @click.group("fleet")
@@ -208,6 +209,153 @@ def get_recording(ctx: click.Context, uid: str) -> None:
             "created_at",
             "updated_at",
         ],
+    )
+
+
+@recordings.command("upload")
+@click.option(
+    "--source",
+    required=True,
+    type=click.Path(exists=True, file_okay=False),
+    help="Local directory containing recording files",
+)
+@click.option(
+    "--recording", "recording_uid", default=None, help="Existing recording UID (creates one if --device provided)"
+)
+@click.option("--device", "device_uid", default=None, help="Device UID (creates recording automatically)")
+@click.option("--storage-config", "storage_config_uid", default=None, help="Storage config UID for S3 target")
+@click.option("--workers", type=int, default=4, help="Parallel upload threads (default: 4)")
+@click.option("--dry-run", is_flag=True, default=False, help="Preview what would be uploaded")
+@click.option("--wait", "wait_after", is_flag=True, default=False, help="Wait for server-side processing to complete")
+@click.option("--wait-timeout", type=float, default=3600.0, help="Timeout for --wait in seconds (default: 3600)")
+@click.pass_context
+def upload_recording(
+    ctx: click.Context,
+    source: str,
+    recording_uid: str | None,
+    device_uid: str | None,
+    storage_config_uid: str | None,
+    workers: int,
+    dry_run: bool,
+    wait_after: bool,
+    wait_timeout: float,
+) -> None:
+    """Upload local files to a fleet recording via resumable presigned URLs.
+
+    Supports resume after network drops or device reboots. Automatically
+    picks up where the last upload left off.
+    """
+    from pathlib import Path
+
+    client = ctx.obj["client"]
+
+    # Resolve or create recording
+    if recording_uid:
+        rec = client.fleet.recordings.get(recording_uid)
+        click.echo(f"Uploading to recording: {rec.uid}", err=True)
+    elif device_uid:
+        raise click.ClickException("Creating recordings via CLI is not yet supported. Provide --recording UID.")
+    else:
+        raise click.ClickException("Either --recording or --device is required.")
+
+    # Collect files for summary
+    source_path = Path(source).resolve()
+    file_count = sum(1 for _ in source_path.rglob("*") if _.is_file())
+    total_bytes = sum(f.stat().st_size for f in source_path.rglob("*") if f.is_file())
+
+    click.echo(f"Source: {source_path}", err=True)
+    click.echo(f"Files: {file_count} ({human_bytes(total_bytes)})", err=True)
+
+    if file_count == 0:
+        raise click.ClickException(f"No files found in {source}")
+
+    # Dry run
+    if dry_run:
+        click.echo("\n[DRY RUN] Would upload:", err=True)
+        for f in list(source_path.rglob("*"))[:20]:
+            if f.is_file():
+                rel = f.relative_to(source_path).as_posix()
+                click.echo(f"  {rel} ({human_bytes(f.stat().st_size)})", err=True)
+        if file_count > 20:
+            click.echo(f"  ... and {file_count - 20} more files", err=True)
+        click.echo(f"\nTotal: {file_count} files ({human_bytes(total_bytes)})", err=True)
+        return
+
+    # Check for resume state
+    state_file = Path.home() / ".avala" / "uploads" / f"{rec.uid}.json"
+    if state_file.exists():
+        click.echo("Resuming previous upload session...", err=True)
+
+    # Upload with progress
+    try:
+        from tqdm import tqdm
+
+        progress_bar = tqdm(total=file_count, unit="file", desc="Uploading")
+    except ImportError:
+        progress_bar = None
+
+    last_uploaded = [0]
+
+    def _on_progress(p):  # type: ignore[no-untyped-def]
+        if progress_bar:
+            delta = p.uploaded_files - last_uploaded[0]
+            if delta > 0:
+                progress_bar.update(delta)
+                last_uploaded[0] = p.uploaded_files
+
+    start = time.monotonic()
+    try:
+        session = client.fleet.uploads.upload_recording(
+            rec.uid,
+            source,
+            storage_config_uid=storage_config_uid,
+            max_workers=workers,
+            on_progress=_on_progress,
+        )
+    except Exception as exc:
+        if progress_bar:
+            progress_bar.close()
+        raise click.ClickException(str(exc))
+
+    if progress_bar:
+        progress_bar.close()
+
+    elapsed = time.monotonic() - start
+    click.echo(
+        f"\nDone in {elapsed:.1f}s — {session.confirmed_files}/{session.total_files} files confirmed.",
+        err=True,
+    )
+
+    # Wait for processing
+    if wait_after and session.status != "completed":
+        click.echo(f"\nWaiting for recording {rec.uid} to finish processing...", err=True)
+        poll_start = time.monotonic()
+        try:
+            rec = client.fleet.recordings.get(rec.uid)
+            while rec.status not in ("ready", "error") and (time.monotonic() - poll_start) < wait_timeout:
+                poll_elapsed = int(time.monotonic() - poll_start)
+                click.echo(f"  status={rec.status} (elapsed: {poll_elapsed}s)", err=True)
+                time.sleep(10)
+                rec = client.fleet.recordings.get(rec.uid)
+        except Exception as exc:
+            raise click.ClickException(f"Error while waiting: {exc}")
+
+        if rec.status == "ready":
+            click.echo(f"Recording {rec.uid} is ready.", err=True)
+        elif rec.status == "error":
+            raise click.ClickException(f"Recording {rec.uid} processing failed.")
+        else:
+            raise click.ClickException(f"Timed out waiting for recording {rec.uid} (status: {rec.status})")
+
+    print_detail(
+        f"Recording: {rec.uid}",
+        [
+            ("UID", rec.uid),
+            ("Status", rec.status or "—"),
+            ("Size", str(rec.size_bytes or "—")),
+            ("Upload", f"{session.confirmed_files}/{session.total_files} files"),
+        ],
+        json_keys=["uid", "status", "size_bytes", "upload_progress"],
     )
 
 

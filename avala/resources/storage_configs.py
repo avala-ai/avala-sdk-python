@@ -80,6 +80,10 @@ class StorageConfigs(BaseSyncResource):
         data = self._transport.request("POST", f"/storage-configs/{uid}/test/")
         return data  # type: ignore[no-any-return]
 
+    def get(self, uid: str) -> StorageConfig:
+        data = self._transport.request("GET", f"/storage-configs/{uid}/")
+        return StorageConfig.model_validate(data)
+
     def delete(self, uid: str) -> None:
         self._transport.request("DELETE", f"/storage-configs/{uid}/")
 
@@ -154,6 +158,10 @@ class AsyncStorageConfigs(BaseAsyncResource):
     async def test(self, uid: str) -> dict[str, Any]:
         data = await self._transport.request("POST", f"/storage-configs/{uid}/test/")
         return data  # type: ignore[no-any-return]
+
+    async def get(self, uid: str) -> StorageConfig:
+        data = await self._transport.request("GET", f"/storage-configs/{uid}/")
+        return StorageConfig.model_validate(data)
 
     async def delete(self, uid: str) -> None:
         await self._transport.request("DELETE", f"/storage-configs/{uid}/")

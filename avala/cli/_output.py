@@ -85,3 +85,12 @@ def print_detail(
     for key, value in fields:
         table.add_row(key, value)
     console.print(table)
+
+
+def human_bytes(n: float) -> str:
+    """Format a byte count as a human-readable string."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
