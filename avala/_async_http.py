@@ -13,6 +13,7 @@ from avala._pagination import CursorPage
 from avala.errors import (
     AuthenticationError,
     AvalaError,
+    ForbiddenError,
     NotFoundError,
     RateLimitError,
     ServerError,
@@ -99,6 +100,8 @@ class AsyncHTTPTransport:
         status = response.status_code
         if status == 401:
             raise AuthenticationError(message, status, body)
+        if status == 403:
+            raise ForbiddenError(message, status, body)
         if status == 404:
             raise NotFoundError(message, status, body)
         if status == 429:

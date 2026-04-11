@@ -19,6 +19,10 @@ class AuthenticationError(AvalaError):
     """Raised on 401 responses."""
 
 
+class ForbiddenError(AvalaError):
+    """Raised on 403 responses (insufficient permissions, wrong scope, or plan level)."""
+
+
 class NotFoundError(AvalaError):
     """Raised on 404 responses."""
 
