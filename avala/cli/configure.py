@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 
 import click
 
@@ -15,7 +14,10 @@ def configure() -> None:
     """Configure API key and base URL for the Avala CLI."""
     click.echo("Configure your Avala CLI credentials.\n")
 
-    api_key = click.prompt("API Key", type=str)
+    # hide_input=True — never echo the key to the terminal. Otherwise it
+    # appears on screen (shoulder-surfing range) and in any terminal
+    # recording or screen-share.
+    api_key = click.prompt("API Key", type=str, hide_input=True)
     base_url = click.prompt(
         "Base URL",
         type=str,
@@ -42,12 +44,16 @@ def configure() -> None:
         if not click.confirm("\nKey validation failed. Save anyway?", default=False):
             raise click.Abort()
 
-    click.echo(f"\nAdd these to your shell profile ({_shell_profile()}):\n")
-    click.echo(f"  export AVALA_API_KEY={shlex.quote(api_key)}")
+    # Never print the full key to stdout — it ends up in shell history,
+    # terminal recordings, CI logs, and clipboard managers. Show only the
+    # masked key and instruct the user to set the env var from the
+    # (non-echoed) value they just entered.
+    click.echo(f"\nKey validated ({masked_key}).\n")
+    click.echo(f"Add this to your shell profile ({_shell_profile()}):\n")
+    click.echo("  export AVALA_API_KEY='<paste your key here>'")
     if base_url != DEFAULT_BASE_URL:
-        click.echo(f"  export AVALA_BASE_URL={shlex.quote(base_url)}")
-    click.echo(f"\n  (Key shown: {masked_key} — clear your terminal history after copying)")
-    click.echo("\nOr pass them as flags: avala --api-key <key> <command>")
+        click.echo(f"  export AVALA_BASE_URL='{base_url}'")
+    click.echo("\nOr pass the key as a flag: avala --api-key <key> <command>")
 
 
 def _shell_profile() -> str:

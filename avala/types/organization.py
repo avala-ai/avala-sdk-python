@@ -30,6 +30,8 @@ class Organization(BaseModel):
     joined_at: Optional[datetime] = None
     slug_edits_remaining: Optional[int] = None
     allowed_domains: Optional[List[str]] = None
+    billing_status: Optional[str] = None
+    public_slug: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

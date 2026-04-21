@@ -7,7 +7,7 @@ import httpx
 import respx
 
 from avala._config import ClientConfig
-from avala._http import SyncHTTPTransport, _extract_cursor
+from avala._http import SyncHTTPTransport, _extract_cursor, _validate_path
 from avala.errors import (
     AuthenticationError,
     AvalaError,
@@ -229,3 +229,42 @@ class TestCursorExtraction:
     def test_extract_cursor_no_cursor_param(self):
         url = "https://api.avala.ai/api/v1/datasets/?limit=10"
         assert _extract_cursor(url) is None
+
+
+class TestPathValidation:
+    """Defense-in-depth against path-traversal via unescaped resource identifiers."""
+
+    def test_valid_paths_pass(self):
+        _validate_path("/datasets/")
+        _validate_path("/datasets/owner/slug/")
+        _validate_path("/datasets/?limit=10")
+
+    def test_rejects_literal_traversal(self):
+        with pytest.raises(ValueError, match="traversal"):
+            _validate_path("/datasets/../admin/")
+        with pytest.raises(ValueError, match="traversal"):
+            _validate_path("/datasets/foo/..")
+        with pytest.raises(ValueError, match="traversal"):
+            _validate_path("/datasets/./admin/")
+
+    def test_rejects_url_encoded_traversal(self):
+        with pytest.raises(ValueError, match="URL-encoded"):
+            _validate_path("/datasets/%2e%2e/admin/")
+        with pytest.raises(ValueError, match="URL-encoded"):
+            _validate_path("/datasets/%2E%2E/admin/")
+
+    def test_rejects_embedded_scheme(self):
+        with pytest.raises(ValueError, match="scheme"):
+            _validate_path("/datasets/http://evil.example.com/")
+
+    def test_rejects_mid_path_double_slash(self):
+        with pytest.raises(ValueError, match="'//'"):
+            _validate_path("/datasets//admin/")
+
+    def test_rejects_leading_double_slash(self):
+        with pytest.raises(ValueError, match="Invalid path"):
+            _validate_path("//evil.example.com/path")
+
+    def test_rejects_non_leading_slash(self):
+        with pytest.raises(ValueError, match="start with"):
+            _validate_path("datasets/")

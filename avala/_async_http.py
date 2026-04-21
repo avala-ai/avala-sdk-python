@@ -36,6 +36,9 @@ class AsyncHTTPTransport:
                 "Accept": "application/json",
             },
             timeout=config.timeout,
+            # Explicit — httpx defaults to False, but a follow_redirects=True
+            # regression would replay X-Avala-Api-Key on cross-host 3xx.
+            follow_redirects=False,
         )
 
     @property

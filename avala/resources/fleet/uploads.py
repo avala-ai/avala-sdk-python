@@ -10,6 +10,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from avala.resources._base import BaseSyncResource
 from avala.types.fleet_upload import (
@@ -26,6 +27,37 @@ _STATE_DIR = Path.home() / ".avala" / "uploads"
 _URL_BATCH_SIZE = 100
 _CONFIRM_BATCH_SIZE = 500
 _MAX_RETRIES = 3
+
+# Allow-list of host suffixes that may receive file contents via presigned
+# PUT URLs. Prevents a compromised/misbehaving control-plane response (or
+# MITM) from redirecting local file bytes to an attacker-controlled host.
+# Extend cautiously — each entry is a trust boundary for raw file data.
+_PRESIGNED_URL_HOST_SUFFIXES = (
+    ".amazonaws.com",  # S3 (any region) — e.g. s3.us-west-2.amazonaws.com
+    ".storage.googleapis.com",  # GCS presigned URLs
+    ".blob.core.windows.net",  # Azure Blob SAS URLs
+)
+
+
+def _validate_presigned_put_url(url: str) -> None:
+    """Ensure a server-provided upload URL targets a known cloud-storage host.
+
+    The SDK trusts the server to mint presigned URLs, but a hijacked
+    control-plane response would otherwise exfiltrate raw file bytes to any
+    host. This enforces `https://` and a host-suffix allow-list.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"Upload URL must use HTTPS, got scheme '{parsed.scheme}'.")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise ValueError("Upload URL has no host.")
+    if not any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in _PRESIGNED_URL_HOST_SUFFIXES):
+        raise ValueError(
+            f"Upload URL host '{host}' is not in the presigned-URL allow-list. "
+            "Expected S3 (*.amazonaws.com), GCS (*.storage.googleapis.com), or Azure Blob "
+            "(*.blob.core.windows.net)."
+        )
 
 
 class FleetUploadManager(BaseSyncResource):
@@ -232,6 +264,8 @@ class FleetUploadManager(BaseSyncResource):
     def _upload_file(local_path: Path, url_entry: UploadUrlEntry) -> str:
         """Upload a single file to S3 via presigned PUT URL. Returns the ETag."""
         import httpx
+
+        _validate_presigned_put_url(url_entry.put_url)
 
         headers = dict(url_entry.headers)
         file_size = local_path.stat().st_size

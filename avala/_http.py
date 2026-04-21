@@ -36,6 +36,9 @@ class SyncHTTPTransport:
                 "Accept": "application/json",
             },
             timeout=config.timeout,
+            # Explicit — httpx defaults to False, but a follow_redirects=True
+            # regression would replay X-Avala-Api-Key on cross-host 3xx.
+            follow_redirects=False,
         )
 
     @property
@@ -132,7 +135,35 @@ def _extract_cursor(url: str | None) -> str | None:
 
 
 def _validate_path(path: str) -> None:
+    """Validate a request path before it goes on the wire.
+
+    Defense-in-depth against path-traversal pivots via unescaped resource
+    identifiers. Resource classes interpolate caller-supplied values (UIDs,
+    slugs, owner names) into URL paths, so a malicious value like ``"../admin"``
+    could otherwise reach a different endpoint. We reject the traversal
+    markers here rather than auditing every interpolation site.
+    """
     if not path.startswith("/"):
         raise ValueError("Path must start with '/' and be a relative API path.")
     if path.startswith("//") or "\n" in path or "\r" in path:
         raise ValueError("Invalid path format.")
+
+    # Strip query string before traversal checks — `?foo=bar` is fine, but
+    # `/a/../b` in the path portion is not.
+    path_only = path.split("?", 1)[0]
+    lowered = path_only.lower()
+
+    # Scheme-relative or absolute URLs must never appear after the leading "/".
+    if "://" in lowered:
+        raise ValueError("Path must not contain a URL scheme.")
+
+    # Literal and URL-encoded path-traversal markers.
+    if "/../" in path_only or path_only.endswith("/..") or "/./" in path_only:
+        raise ValueError("Path must not contain traversal segments.")
+    # %2e%2e%2f / %2E%2E%2F / mixed case all resolve to "../" server-side.
+    if "%2e%2e" in lowered or "%2f%2e%2e" in lowered:
+        raise ValueError("Path must not contain URL-encoded traversal segments.")
+    # Embedded "//" mid-path can be used to pivot to a different resource root
+    # (Django's URL resolver collapses them in some configurations).
+    if "//" in path_only[1:]:
+        raise ValueError("Path must not contain '//' segments.")

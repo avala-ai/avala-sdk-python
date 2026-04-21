@@ -82,11 +82,23 @@ def get_storage_config(ctx: click.Context, uid: str) -> None:
 @click.option("--s3-bucket-name", default=None, help="S3 bucket name")
 @click.option("--s3-bucket-region", default=None, help="S3 bucket region")
 @click.option("--s3-bucket-prefix", default=None, help="S3 bucket prefix")
-@click.option("--s3-access-key-id", default=None, help="S3 access key ID")
-@click.option("--s3-secret-access-key", default=None, help="S3 secret access key")
+@click.option(
+    "--s3-access-key-id",
+    default=None,
+    help="S3 access key ID (prefer AVALA_S3_ACCESS_KEY_ID env var)",
+)
+@click.option(
+    "--s3-secret-access-key",
+    default=None,
+    help="S3 secret access key — NOT RECOMMENDED; use AVALA_S3_SECRET_ACCESS_KEY env var or interactive prompt.",
+)
 @click.option("--gc-bucket-name", default=None, help="GCS bucket name")
 @click.option("--gc-prefix", default=None, help="GCS prefix")
-@click.option("--gc-auth-json", default=None, help="GCS auth JSON content")
+@click.option(
+    "--gc-auth-json",
+    default=None,
+    help="GCS auth JSON content — NOT RECOMMENDED; use AVALA_GC_AUTH_JSON env var or interactive prompt.",
+)
 @click.pass_context
 def create_storage_config(
     ctx: click.Context,
@@ -101,8 +113,48 @@ def create_storage_config(
     gc_prefix: str | None,
     gc_auth_json: str | None,
 ) -> None:
-    """Create a new storage configuration."""
+    """Create a new storage configuration.
+
+    Secrets (``--s3-secret-access-key``, ``--gc-auth-json``) passed on the
+    command line are visible in shell history and ``ps`` output. Prefer
+    environment variables (``AVALA_S3_SECRET_ACCESS_KEY``,
+    ``AVALA_GC_AUTH_JSON``) or the interactive prompt triggered when the
+    flags are omitted.
+    """
+    import os
+
     client = ctx.obj["client"]
+
+    # Warn loudly if a secret was passed on the command line.
+    if s3_secret_access_key is not None:
+        click.echo(
+            click.style(
+                "WARNING: --s3-secret-access-key on the command line is visible in shell "
+                "history and 'ps' output. Use AVALA_S3_SECRET_ACCESS_KEY env var instead.",
+                fg="yellow",
+            ),
+            err=True,
+        )
+    if gc_auth_json is not None:
+        click.echo(
+            click.style(
+                "WARNING: --gc-auth-json on the command line is visible in shell history "
+                "and 'ps' output. Use AVALA_GC_AUTH_JSON env var instead.",
+                fg="yellow",
+            ),
+            err=True,
+        )
+
+    # Env var fallback — values only read when the flag is omitted, so explicit
+    # --flag still wins (with the warning above). No interactive prompt: it
+    # would change the behavior of non-credential invocations.
+    if s3_access_key_id is None:
+        s3_access_key_id = os.environ.get("AVALA_S3_ACCESS_KEY_ID") or None
+    if s3_secret_access_key is None:
+        s3_secret_access_key = os.environ.get("AVALA_S3_SECRET_ACCESS_KEY") or None
+    if gc_auth_json is None:
+        gc_auth_json = os.environ.get("AVALA_GC_AUTH_JSON") or None
+
     sc = client.storage_configs.create(
         name=name,
         provider=provider,
