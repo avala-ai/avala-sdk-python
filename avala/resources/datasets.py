@@ -8,9 +8,71 @@ from typing import Any
 
 from avala._pagination import CursorPage
 from avala.resources._base import BaseAsyncResource, BaseSyncResource
-from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
+from avala.types.dataset import (
+    CameraCalibration,
+    Dataset,
+    DatasetCalibration,
+    DatasetFrame,
+    DatasetHealth,
+    DatasetItem,
+    DatasetSequence,
+    FrameImage,
+    Quat,
+    Vec3,
+)
 
 _MIN_INTERVAL = 1.0
+
+
+def _build_frame(frames: list[dict[str, Any]], frame_idx: int, sequence_uid: str) -> DatasetFrame:
+    if not 0 <= frame_idx < len(frames):
+        raise IndexError(f"frame_idx {frame_idx} out of range for sequence {sequence_uid} with {len(frames)} frames")
+    raw = frames[frame_idx]
+    images_raw = raw.get("images") or []
+    images = [FrameImage(**{k: v for k, v in img.items() if k in FrameImage.model_fields}) for img in images_raw]
+    device_position = Vec3(**raw["device_position"]) if isinstance(raw.get("device_position"), dict) else None
+    device_heading = Quat(**raw["device_heading"]) if isinstance(raw.get("device_heading"), dict) else None
+    model = raw.get("model") or raw.get("camera_model")
+    return DatasetFrame(
+        frame_index=frame_idx,
+        key=raw.get("key"),
+        model=model,
+        camera_model=raw.get("camera_model") or raw.get("model"),
+        xi=raw.get("xi"),
+        alpha=raw.get("alpha"),
+        device_position=device_position,
+        device_heading=device_heading,
+        images=images,
+        raw=raw,
+    )
+
+
+def _build_calibration_from_sequence(sequence: DatasetSequence) -> DatasetCalibration:
+    frames = sequence.frames or []
+    if not frames:
+        return DatasetCalibration(sequence_uid=sequence.uid, cameras=[])
+    frame0 = frames[0]
+    cameras: list[CameraCalibration] = []
+    for img in frame0.get("images") or []:
+        position = Vec3(**img["position"]) if isinstance(img.get("position"), dict) else None
+        heading = Quat(**img["heading"]) if isinstance(img.get("heading"), dict) else None
+        cameras.append(
+            CameraCalibration(
+                camera_id=img.get("camera") or img.get("camera_id") or img.get("sensor_id"),
+                position=position,
+                heading=heading,
+                width=img.get("width"),
+                height=img.get("height"),
+                fx=img.get("fx"),
+                fy=img.get("fy"),
+                cx=img.get("cx"),
+                cy=img.get("cy"),
+                model=img.get("model") or img.get("camera_model") or frame0.get("model"),
+                xi=img.get("xi") if img.get("xi") is not None else frame0.get("xi"),
+                alpha=img.get("alpha") if img.get("alpha") is not None else frame0.get("alpha"),
+            )
+        )
+    return DatasetCalibration(sequence_uid=sequence.uid, cameras=cameras)
 
 
 class Datasets(BaseSyncResource):
@@ -114,6 +176,31 @@ class Datasets(BaseSyncResource):
     def get_sequence(self, owner: str, slug: str, sequence_uid: str) -> DatasetSequence:
         data = self._transport.request("GET", f"/datasets/{owner}/{slug}/sequences/{sequence_uid}/")
         return DatasetSequence.model_validate(data)
+
+    def get_frame(self, owner: str, slug: str, sequence_uid: str, frame_idx: int) -> DatasetFrame:
+        """Return a single frame's LiDAR JSON metadata.
+
+        Indexes into ``get_sequence().frames`` client-side — the server embeds
+        the full frame array on the sequence response, so no extra round-trip
+        is needed beyond the sequence fetch.
+        """
+        sequence = self.get_sequence(owner, slug, sequence_uid)
+        return _build_frame(sequence.frames or [], frame_idx, sequence_uid)
+
+    def get_calibration(self, owner: str, slug: str, sequence_uid: str) -> DatasetCalibration:
+        """Return a canonicalized rig view for a sequence, derived from frame[0]."""
+        sequence = self.get_sequence(owner, slug, sequence_uid)
+        return _build_calibration_from_sequence(sequence)
+
+    def get_health(self, owner: str, slug: str) -> DatasetHealth:
+        """Return a read-only health snapshot for the dataset.
+
+        Calls ``GET /datasets/<owner>/<slug>/health/`` — intended for
+        post-ingest validation (frame counts, indexing status, per-sequence
+        calibration presence, S3 prefix, any issues detected).
+        """
+        data = self._transport.request("GET", f"/datasets/{owner}/{slug}/health/")
+        return DatasetHealth.model_validate(data)
 
     def wait(
         self,
@@ -261,6 +348,21 @@ class AsyncDatasets(BaseAsyncResource):
     async def get_sequence(self, owner: str, slug: str, sequence_uid: str) -> DatasetSequence:
         data = await self._transport.request("GET", f"/datasets/{owner}/{slug}/sequences/{sequence_uid}/")
         return DatasetSequence.model_validate(data)
+
+    async def get_frame(self, owner: str, slug: str, sequence_uid: str, frame_idx: int) -> DatasetFrame:
+        """Return a single frame's LiDAR JSON metadata (async)."""
+        sequence = await self.get_sequence(owner, slug, sequence_uid)
+        return _build_frame(sequence.frames or [], frame_idx, sequence_uid)
+
+    async def get_calibration(self, owner: str, slug: str, sequence_uid: str) -> DatasetCalibration:
+        """Return a canonicalized rig view for a sequence (async)."""
+        sequence = await self.get_sequence(owner, slug, sequence_uid)
+        return _build_calibration_from_sequence(sequence)
+
+    async def get_health(self, owner: str, slug: str) -> DatasetHealth:
+        """Return a read-only health snapshot for the dataset (async)."""
+        data = await self._transport.request("GET", f"/datasets/{owner}/{slug}/health/")
+        return DatasetHealth.model_validate(data)
 
     async def wait(
         self,

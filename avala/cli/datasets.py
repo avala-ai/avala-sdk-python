@@ -80,6 +80,141 @@ def get_dataset(ctx: click.Context, uid: str) -> None:
     )
 
 
+@datasets.command("get-sequence")
+@click.argument("owner")
+@click.argument("slug")
+@click.argument("sequence_uid")
+@click.pass_context
+def get_sequence_cmd(ctx: click.Context, owner: str, slug: str, sequence_uid: str) -> None:
+    """Get a sequence's detail (frame count, status, frames array)."""
+    client = ctx.obj["client"]
+    seq = client.datasets.get_sequence(owner, slug, sequence_uid)
+    frames = seq.frames or []
+    print_detail(
+        f"Sequence: {seq.key or seq.uid}",
+        [
+            ("UID", seq.uid),
+            ("Key", seq.key or "—"),
+            ("Status", seq.status or "—"),
+            ("Frames", str(len(frames))),
+            ("Dataset UID", seq.dataset_uid or "—"),
+            ("Lidar calibration", "on" if seq.lidar_calibration_enabled else "off"),
+            ("Camera calibration", "on" if seq.camera_calibration_enabled else "off"),
+        ],
+        json_keys=[
+            "uid",
+            "key",
+            "status",
+            "dataset_uid",
+            "number_of_frames",
+            "lidar_calibration_enabled",
+            "camera_calibration_enabled",
+        ],
+    )
+
+
+@datasets.command("get-frame")
+@click.argument("owner")
+@click.argument("slug")
+@click.argument("sequence_uid")
+@click.argument("frame_idx", type=int)
+@click.pass_context
+def get_frame_cmd(ctx: click.Context, owner: str, slug: str, sequence_uid: str, frame_idx: int) -> None:
+    """Get a single frame's LiDAR JSON metadata (model, xi, alpha, device pose, cameras)."""
+    client = ctx.obj["client"]
+    frame = client.datasets.get_frame(owner, slug, sequence_uid, frame_idx)
+    print_detail(
+        f"Frame {frame_idx}",
+        [
+            ("Frame index", str(frame.frame_index)),
+            ("Key", frame.key or "—"),
+            ("Model", frame.model or frame.camera_model or "—"),
+            ("xi", f"{frame.xi}" if frame.xi is not None else "—"),
+            ("alpha", f"{frame.alpha}" if frame.alpha is not None else "—"),
+            ("Cameras", str(len(frame.images or []))),
+            (
+                "Device position",
+                f"x={frame.device_position.x} y={frame.device_position.y} z={frame.device_position.z}"
+                if frame.device_position
+                else "—",
+            ),
+        ],
+        json_keys=["frame_index", "key", "model", "xi", "alpha", "device_position", "device_heading"],
+    )
+
+
+@datasets.command("get-calibration")
+@click.argument("owner")
+@click.argument("slug")
+@click.argument("sequence_uid")
+@click.pass_context
+def get_calibration_cmd(ctx: click.Context, owner: str, slug: str, sequence_uid: str) -> None:
+    """Get the canonicalized rig calibration for a sequence (derived from frame[0])."""
+    client = ctx.obj["client"]
+    calib = client.datasets.get_calibration(owner, slug, sequence_uid)
+    rows = [
+        (
+            c.camera_id or "—",
+            c.model or "—",
+            f"{c.fx}" if c.fx is not None else "—",
+            f"{c.fy}" if c.fy is not None else "—",
+            f"{c.cx}" if c.cx is not None else "—",
+            f"{c.cy}" if c.cy is not None else "—",
+            f"{c.xi}" if c.xi is not None else "—",
+            f"{c.alpha}" if c.alpha is not None else "—",
+        )
+        for c in calib.cameras
+    ]
+    print_table(
+        f"Calibration — sequence {sequence_uid}",
+        ["Camera", "Model", "fx", "fy", "cx", "cy", "xi", "alpha"],
+        rows,
+        json_keys=["camera_id", "model", "fx", "fy", "cx", "cy", "xi", "alpha"],
+    )
+
+
+@datasets.command("health")
+@click.argument("owner")
+@click.argument("slug")
+@click.pass_context
+def health_cmd(ctx: click.Context, owner: str, slug: str) -> None:
+    """Get an ingest/health snapshot for a dataset."""
+    client = ctx.obj["client"]
+    h = client.datasets.get_health(owner, slug)
+    print_detail(
+        f"Health: {h.dataset_slug}",
+        [
+            ("Dataset UID", h.dataset_uid),
+            ("Status", h.dataset_status or "—"),
+            ("Items", str(h.item_count)),
+            ("Sequences", str(h.sequence_count)),
+            ("Frames", str(h.total_frames)),
+            ("S3 prefix", h.s3_prefix or "—"),
+            ("Last item updated", str(h.last_item_updated_at or "—")),
+            ("Ingest OK", "yes" if h.ingest_ok else "no"),
+            ("Issues", "; ".join(h.issues) or "—"),
+        ],
+        json_keys=[
+            "dataset_uid",
+            "dataset_slug",
+            "dataset_status",
+            "item_count",
+            "sequence_count",
+            "total_frames",
+            "s3_prefix",
+            "ingest_ok",
+            "issues",
+        ],
+    )
+    for seq in h.sequences:
+        click.echo(
+            f"  - {seq.key or seq.uid}: frames={seq.frame_count} status={seq.status} "
+            f"lidar_calib={'y' if seq.has_lidar_calibration else 'n'} "
+            f"cam_calib={'y' if seq.has_camera_calibration else 'n'}",
+            err=True,
+        )
+
+
 @datasets.command("create")
 @click.option("--name", required=True, help="Display name for the dataset")
 @click.option("--slug", required=True, help="URL-friendly identifier")
