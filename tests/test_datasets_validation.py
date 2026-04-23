@@ -75,7 +75,8 @@ HEALTH_PAYLOAD = {
     "sequence_count": 1,
     "total_frames": 569,
     "s3_prefix": "third-dimension/alf_data/third-dimension-095940-full-scene/full-scene-569",
-    "last_item_updated_at": "2026-04-21T15:33:02Z",
+    "gc_storage_prefix": None,
+    "last_updated_at": "2026-04-21T15:33:02Z",
     "sequences": [
         {
             "uid": "55555555-5555-5555-5555-555555555555",

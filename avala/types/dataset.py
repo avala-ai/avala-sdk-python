@@ -151,8 +151,11 @@ class DatasetHealth(BaseModel):
     item_count: int = 0
     sequence_count: int = 0
     total_frames: int = 0
+    # Storage prefix fields are owner/staff-only on the server. Non-owners
+    # always receive ``None`` even for public datasets.
     s3_prefix: Optional[str] = None
-    last_item_updated_at: Optional[datetime] = None
+    gc_storage_prefix: Optional[str] = None
+    last_updated_at: Optional[datetime] = None
     sequences: List[SequenceHealth] = []
     ingest_ok: bool = False
     issues: List[str] = []
