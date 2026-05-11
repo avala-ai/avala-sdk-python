@@ -38,6 +38,72 @@ def test_datasets_list():
     assert "abc123" in result.output
 
 
+def test_datasets_upload_dry_run_local_file():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("frame.jpg", "wb") as fh:
+            fh.write(b"image")
+
+        result = runner.invoke(
+            main,
+            [
+                "--api-key",
+                "test-key",
+                "datasets",
+                "upload",
+                "--source",
+                "frame.jpg",
+                "--name",
+                "Manual Dataset",
+                "--slug",
+                "manual-dataset",
+                "--data-type",
+                "image",
+                "--industry",
+                "1",
+                "--license",
+                "2",
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Avala-managed dataset upload storage" in result.output
+    assert "frame.jpg" in result.output
+    assert "Would create dataset" in result.output
+
+
+def test_datasets_upload_rejects_legacy_storage_config():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("frame.jpg", "wb") as fh:
+            fh.write(b"image")
+
+        result = runner.invoke(
+            main,
+            [
+                "--api-key",
+                "test-key",
+                "datasets",
+                "upload",
+                "--source",
+                "frame.jpg",
+                "--name",
+                "Manual Dataset",
+                "--slug",
+                "manual-dataset",
+                "--data-type",
+                "image",
+                "--storage-config",
+                "stg_123",
+                "--dry-run",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "remove --storage-config" in result.output
+
+
 @respx.mock
 def test_datasets_list_with_filters():
     route = respx.get("https://api.avala.ai/api/v1/datasets/").mock(

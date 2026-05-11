@@ -13,6 +13,8 @@ class Dataset(BaseModel):
     item_count: int = 0
     status: Optional[str] = None
     data_type: Optional[str] = None
+    is_sequence: Optional[bool] = None
+    predefined_labels: Optional[List[Dict[str, Any]]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

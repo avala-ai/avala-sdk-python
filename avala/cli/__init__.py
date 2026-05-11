@@ -103,6 +103,7 @@ def main(ctx: click.Context, api_key: str | None, base_url: str | None, output: 
 
 # Import and register subcommands
 from avala.cli.agents import agents  # noqa: E402
+from avala.cli.annotations import annotations_group  # noqa: E402
 from avala.cli.auto_label import auto_label  # noqa: E402
 from avala.cli.configure import configure  # noqa: E402
 from avala.cli.consensus import consensus  # noqa: E402
@@ -119,6 +120,7 @@ from avala.cli.tasks import tasks  # noqa: E402
 from avala.cli.webhooks import webhooks  # noqa: E402
 
 main.add_command(agents)
+main.add_command(annotations_group)
 main.add_command(auto_label)
 main.add_command(configure)
 main.add_command(consensus)

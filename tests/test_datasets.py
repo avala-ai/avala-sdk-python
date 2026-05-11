@@ -93,6 +93,36 @@ def test_get_dataset():
 
 
 @respx.mock
+def test_get_dataset_by_slug():
+    owner = "serve.robotics@avala.ai"
+    slug = "poc2"
+    respx.get(f"{BASE_URL}/datasets/{owner}/{slug}/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "uid": "ds-uid",
+                "name": "POC2",
+                "slug": slug,
+                "data_type": "lidar",
+                "is_sequence": True,
+                "predefined_labels": [
+                    {"name": "car", "label_code": 1, "locked": False, "is_countable": True},
+                ],
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    dataset = client.datasets.get_by_slug(owner, slug)
+    assert dataset.slug == slug
+    assert dataset.data_type == "lidar"
+    assert dataset.is_sequence is True
+    assert dataset.predefined_labels == [
+        {"name": "car", "label_code": 1, "locked": False, "is_countable": True},
+    ]
+    client.close()
+
+
+@respx.mock
 def test_list_datasets_with_pagination():
     respx.get(f"{BASE_URL}/datasets/").mock(
         return_value=httpx.Response(
@@ -213,6 +243,67 @@ def test_create_dataset_with_organization_id():
     assert body["industry"] == 265
     assert body["license"] == 67
     assert body["metadata"] == {"key": "value"}
+    client.close()
+
+
+@respx.mock
+def test_create_manual_upload_url():
+    """Datasets.create_manual_upload_url() sends the local-upload presign payload."""
+    route = respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "method": "POST",
+                "url": "https://s3.example/upload",
+                "fields": {"key": "user/dataset/frame.jpg"},
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    upload_info = client.datasets.create_manual_upload_url(
+        dataset_name="New Dataset",
+        file_path_in_dataset="frame.jpg",
+        content_length=1234,
+    )
+    assert upload_info["url"] == "https://s3.example/upload"
+    body = json.loads(route.calls[0].request.content)
+    assert body == {
+        "dataset_name": "New Dataset",
+        "file_path_in_dataset": "frame.jpg",
+        "content_length": 1234,
+    }
+    client.close()
+
+
+@respx.mock
+def test_create_from_manual_upload():
+    """Datasets.create_from_manual_upload() creates a dataset from uploaded local files."""
+    route = respx.post(f"{BASE_URL}/datasets/manual-upload/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "manual-dataset-uid",
+                "name": "Manual Dataset",
+                "slug": "manual-dataset",
+                "item_count": 0,
+                "data_type": "image",
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    dataset = client.datasets.create_from_manual_upload(
+        name="Manual Dataset",
+        slug="manual-dataset",
+        data_type="image",
+        industry=10,
+        license=20,
+    )
+    assert dataset.uid == "manual-dataset-uid"
+    body = json.loads(route.calls[0].request.content)
+    assert body["name"] == "Manual Dataset"
+    assert body["industry"] == 10
+    assert body["license"] == 20
+    assert "provider_config" not in body
     client.close()
 
 

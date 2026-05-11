@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from avala._config import ClientConfig
 from avala._pagination import CursorPage
+from avala._redaction import redact
 from avala.errors import (
     AuthenticationError,
     AvalaError,
@@ -94,9 +95,31 @@ class SyncHTTPTransport:
         message = f"HTTP {response.status_code}"
         try:
             body = response.json()
-            message = body.get("detail", message) if isinstance(body, dict) else message
+            # Pentest finding sdks/s3-4 (round 3) on PR #11315: only
+            # adopt ``body["detail"]`` as the exception message when
+            # it's actually a string. Some DRF serializers emit
+            # structured details like ``{"detail": {"aws_secret_access_key":
+            # "..."}}`` — assigning that dict to ``message`` and then
+            # bypassing redaction (because ``isinstance(..., str)``
+            # was False) used to leak the raw secret via ``str(exc)``,
+            # since ``Exception.__str__`` formats ``self.args``. Keep
+            # the default ``HTTP <status>`` message in non-string cases
+            # and let callers inspect the (already-redacted) ``body``.
+            if isinstance(body, dict):
+                detail = body.get("detail")
+                if isinstance(detail, str):
+                    message = detail
         except Exception:
             pass
+
+        # Pentest finding sdks/s3-4 (MED, CWE-200/209): the server
+        # commonly echoes parts of the request payload in 4xx/5xx
+        # ``detail`` strings (validation errors quote the offending
+        # field value). Without redaction, secrets in the request body
+        # flow directly into caller logs / Sentry / stdout via the
+        # raised exception's message and ``body`` attribute.
+        message = redact(message) if isinstance(message, str) else message
+        body = redact(body)
 
         status = response.status_code
         if status == 401:

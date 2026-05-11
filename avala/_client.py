@@ -6,6 +6,7 @@ from avala._config import ClientConfig
 from avala._http import SyncHTTPTransport
 from avala.resources.agents import Agents
 from avala.resources.annotation_issues import AnnotationIssues
+from avala.resources.annotations import Annotations
 from avala.resources.auto_label_jobs import AutoLabelJobs
 from avala.resources.consensus import Consensus
 from avala.resources.datasets import Datasets
@@ -41,6 +42,7 @@ class Client:
         self._transport = SyncHTTPTransport(config)
         self.agents = Agents(self._transport)
         self.annotation_issues = AnnotationIssues(self._transport)
+        self.annotations = Annotations(self._transport)
         self.auto_label_jobs = AutoLabelJobs(self._transport)
         self.consensus = Consensus(self._transport)
         self.datasets = Datasets(self._transport)

@@ -6,7 +6,7 @@ import json
 import mimetypes
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import click
 
@@ -310,23 +310,23 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
 @click.option(
     "--source",
     required=True,
-    type=click.Path(exists=True, file_okay=False),
-    help="Local directory containing files to upload",
+    type=click.Path(exists=True),
+    help="Local file or directory containing files to upload",
 )
-@click.option("--dataset", "dataset_uid", default=None, help="Existing dataset UID to upload into")
+@click.option("--dataset", "dataset_uid", default=None, help="Deprecated; local upload creates a new dataset")
 @click.option(
     "--storage-config",
     "storage_config_uid",
-    required=True,
-    help="Storage config UID (provides S3 bucket/region/prefix)",
+    default=None,
+    help="Deprecated; Avala-managed local upload does not use storage configs",
 )
-@click.option("--name", default=None, help="Dataset name (required when creating a new dataset)")
-@click.option("--slug", default=None, help="Dataset slug (required when creating a new dataset)")
+@click.option("--name", required=True, help="Dataset name")
+@click.option("--slug", required=True, help="Dataset slug")
 @click.option(
     "--data-type",
-    default=None,
+    required=True,
     type=click.Choice(["image", "video", "lidar", "mcap", "splat"]),
-    help="Data type (required when creating a new dataset)",
+    help="Data type",
 )
 @click.option("--is-sequence", is_flag=True, default=False, help="Dataset contains sequences")
 @click.option("--owner", default=None, help="Dataset owner username or email")
@@ -336,7 +336,10 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
     type=click.Choice(["private", "public"]),
     help="Dataset visibility (default: private)",
 )
-@click.option("--aws-profile", default=None, help="AWS profile name for credentials (default: boto3 default chain)")
+@click.option("--industry", type=int, default=None, help="Industry ID for the dataset")
+@click.option("--license", "license_id", type=int, default=None, help="License ID for the dataset")
+@click.option("--create-metadata/--no-create-metadata", default=True, help="Create dataset metadata")
+@click.option("--aws-profile", default=None, help="Deprecated; ignored for Avala-managed uploads")
 @click.option("--workers", type=int, default=8, help="Number of parallel upload threads (default: 8)")
 @click.option("--dry-run", is_flag=True, default=False, help="Preview what would be uploaded without uploading")
 @click.option(
@@ -352,38 +355,28 @@ def upload_dataset(
     ctx: click.Context,
     source: str,
     dataset_uid: str | None,
-    storage_config_uid: str,
-    name: str | None,
-    slug: str | None,
-    data_type: str | None,
+    storage_config_uid: str | None,
+    name: str,
+    slug: str,
+    data_type: str,
     is_sequence: bool,
     owner: str | None,
     visibility: str,
+    industry: int | None,
+    license_id: int | None,
+    create_metadata: bool,
     aws_profile: str | None,
     workers: int,
     dry_run: bool,
     wait_after: bool,
     wait_timeout: float,
 ) -> None:
-    """Upload a batch of local files to an S3-backed dataset.
-
-    Uploads ALL files from --source to the S3 location defined by --storage-config.
-    This is a batch upload, not an incremental sync. For incremental uploads, use
-    ``aws s3 sync`` followed by ``avala datasets create``.
-
-    Either upload to an existing dataset (--dataset) or create a new one
-    (--name, --slug, --data-type required). S3 credentials come from the
-    standard boto3 chain (env vars, ~/.aws/credentials, IAM role) or --aws-profile.
-    """
+    """Upload local files to Avala-managed dataset storage and create a dataset."""
     import os
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from pathlib import Path
 
-    try:
-        import boto3
-        from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
-    except ImportError:
-        raise click.ClickException("boto3 is required for upload. Install with: pip install avala[cli]")
+    import httpx
 
     try:
         from tqdm import tqdm
@@ -392,119 +385,144 @@ def upload_dataset(
 
     client = ctx.obj["client"]
 
-    # --- Phase 1: Validate storage config ---
-    sc = client.storage_configs.get(storage_config_uid)
-    if sc.provider != "aws_s3":
-        raise click.ClickException(f"Upload only supports aws_s3 storage configs, got: {sc.provider}")
-    if not sc.s3_bucket_name:
-        raise click.ClickException(f"Storage config {sc.uid} has no S3 bucket name")
+    if dataset_uid:
+        raise click.ClickException("Local upload creates a new dataset; --dataset is not supported.")
+    if storage_config_uid:
+        raise click.ClickException("Local upload uses Avala-managed storage; remove --storage-config.")
+    if aws_profile:
+        raise click.ClickException("Local upload uses Avala-managed storage; remove --aws-profile.")
+    if visibility != "private":
+        raise click.ClickException("Local upload currently supports private datasets only.")
 
-    bucket = sc.s3_bucket_name
-    region = sc.s3_bucket_region or "us-east-1"
-    prefix = (sc.s3_bucket_prefix or "").rstrip("/")
-
-    # --- Phase 2: Collect local files ---
     source_path = Path(source).resolve()
     local_files: list[tuple[Path, str]] = []
-    for root, _, files in os.walk(source_path):
-        for fname in files:
-            local_path = Path(root) / fname
-            relative = local_path.relative_to(source_path).as_posix()
-            s3_key = f"{prefix}/{relative}" if prefix else relative
-            local_files.append((local_path, s3_key))
+    if source_path.is_file():
+        local_files.append((source_path, source_path.name))
+    else:
+        for root, _, files in os.walk(source_path):
+            for fname in sorted(files):
+                local_path = Path(root) / fname
+                relative = local_path.relative_to(source_path).as_posix()
+                local_files.append((local_path, relative))
 
     if not local_files:
         raise click.ClickException(f"No files found in {source}")
 
     total_files = len(local_files)
-    total_bytes = sum(f.stat().st_size for f, _ in local_files)
+    total_bytes = sum(path.stat().st_size for path, _ in local_files)
+    # No client-side quota precheck. The server is the source of truth for
+    # the per-user cap (LOCAL_UPLOAD_PER_USER_BYTES, configurable per
+    # deployment) and returns 413 when a presign would exceed it. A hard
+    # client cap created drift for users with raised limits and shadowed
+    # the authoritative server response. Codex review of PR #11356.
 
-    click.echo(f"S3 target: s3://{bucket}/{prefix}/", err=True)
+    click.echo("Target: Avala-managed dataset upload storage", err=True)
     click.echo(f"Found {total_files} files ({human_bytes(total_bytes)})", err=True)
 
-    # --- Phase 3: Dry run ---
     if dry_run:
         click.echo("\n[DRY RUN] Would upload:", err=True)
-        for local_path, s3_key in local_files[:20]:
-            click.echo(f"  {s3_key} ({human_bytes(local_path.stat().st_size)})", err=True)
+        for local_path, relative in local_files[:20]:
+            click.echo(f"  {relative} ({human_bytes(local_path.stat().st_size)})", err=True)
         if total_files > 20:
             click.echo(f"  ... and {total_files - 20} more files", err=True)
         click.echo(f"\nTotal: {total_files} files ({human_bytes(total_bytes)})", err=True)
-        if not dataset_uid:
-            click.echo(f"Would create dataset: name={name!r}, slug={slug!r}, data_type={data_type!r}", err=True)
+        click.echo(f"Would create dataset: name={name!r}, slug={slug!r}, data_type={data_type!r}", err=True)
         return
 
-    # --- Phase 4: Build S3 client (credentials validated here) ---
-    try:
-        session = boto3.Session(profile_name=aws_profile, region_name=region)
-        s3 = session.client("s3")
-        # Force credential resolution with a lightweight call
-        s3.head_bucket(Bucket=bucket)
-    except NoCredentialsError:
-        raise click.ClickException(
-            "No AWS credentials found.\n\n"
-            "Configure credentials via one of:\n"
-            "  export AWS_ACCESS_KEY_ID=... && export AWS_SECRET_ACCESS_KEY=...\n"
-            "  aws configure\n"
-            "  --aws-profile <profile_name>"
-        )
-    except PartialCredentialsError:
-        raise click.ClickException("Incomplete AWS credentials. Both access key and secret key are required.")
-    except ClientError as exc:
-        code = exc.response.get("Error", {}).get("Code", "")
-        if code == "403":
-            raise click.ClickException(
-                f"Access denied to bucket '{bucket}'. Check your AWS credentials and bucket policy."
-            )
-        raise click.ClickException(f"S3 error: {exc}")
-
-    # --- Phase 5: Create or resolve dataset ---
-    if dataset_uid:
-        dataset = client.datasets.get(dataset_uid)
-        click.echo(f"Uploading to existing dataset: {dataset.uid} ({dataset.name})", err=True)
-    else:
-        if not all([name, slug, data_type]):
-            raise click.ClickException("--name, --slug, and --data-type are required when not using --dataset")
-        provider_config = {
-            "provider": "aws_s3",
-            "s3_bucket_name": bucket,
-            "s3_bucket_region": region,
-            "s3_bucket_prefix": prefix,
-        }
-        dataset = client.datasets.create(
-            name=name,  # type: ignore[arg-type]
-            slug=slug,  # type: ignore[arg-type]
-            data_type=data_type,  # type: ignore[arg-type]
-            is_sequence=is_sequence,
-            visibility=visibility,
-            owner_name=owner,
-            provider_config=provider_config,
-        )
-        click.echo(f"Dataset created: {dataset.uid} ({dataset.name})", err=True)
-
-    # --- Phase 6: Upload ---
     failed_count = 0
+    skipped_count = 0
     uploaded_bytes = 0
     start_time = time.monotonic()
 
+    # Shared stop flag — workers check this BEFORE issuing a presign so an
+    # in-flight worker that hasn't started its presign yet exits cleanly
+    # instead of burning a quota reservation. Codex review of PR #11356
+    # round 4 flagged that submitting every file up front and cancelling
+    # only not-yet-started futures still let already-running workers issue
+    # presigns and S3 PUTs after the first failure.
+    import threading
+    from concurrent.futures import CancelledError
+
+    stop_event = threading.Event()
+
+    class _Skipped(Exception):
+        """Sentinel: worker exited because stop_event was set, not a failure."""
+
     def _upload_one(item: tuple[Path, str]) -> tuple[str, int]:
-        local_path, s3_key = item
-        extra = _extra_args(local_path.name)
-        s3.upload_file(str(local_path), bucket, s3_key, ExtraArgs=extra or None)
-        return (s3_key, local_path.stat().st_size)
+        if stop_event.is_set():
+            raise _Skipped()
+        local_path, relative = item
+        file_size = local_path.stat().st_size
+        if stop_event.is_set():
+            raise _Skipped()
+        upload_info = client.datasets.create_manual_upload_url(
+            dataset_name=name,
+            file_path_in_dataset=relative,
+            content_length=file_size,
+        )
+        if stop_event.is_set():
+            raise _Skipped()
+        fields = upload_info["fields"]
+        content_type = (
+            fields.get("Content-Type") or mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
+        )
+        with local_path.open("rb") as fh:
+            response = httpx.post(
+                upload_info["url"],
+                data=fields,
+                files={"file": (local_path.name, fh, content_type)},
+                timeout=None,
+            )
+            response.raise_for_status()
+        return (relative, file_size)
 
     progress = tqdm(total=total_files, unit="file", desc="Uploading", disable=tqdm is None) if tqdm else None
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_upload_one, item): item for item in local_files}
-        for future in as_completed(futures):
+    # Bounded active set — submit only ``workers`` files at a time, and only
+    # submit the next file after a prior one completes. Combined with the
+    # ``stop_event`` flag, this guarantees no new presigns are issued after
+    # the first failure (the previous all-up-front submission left
+    # already-running workers issuing presigns and PUTs even after we
+    # cancelled the not-started futures).
+    first_error: Optional[Exception] = None
+    iterator = iter(local_files)
+    active: dict = {}
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        # Prime the executor with up to ``workers`` futures.
+        for _ in range(max(1, workers)):
             try:
-                _, nbytes = future.result()
+                item = next(iterator)
+            except StopIteration:
+                break
+            active[pool.submit(_upload_one, item)] = item
+
+        while active:
+            done_future = next(as_completed(active))
+            done_item = active.pop(done_future)
+            try:
+                _, nbytes = done_future.result()
                 uploaded_bytes += nbytes
+                # Advance: submit the next pending file iff we're not stopping.
+                if first_error is None and not stop_event.is_set():
+                    try:
+                        nxt = next(iterator)
+                        active[pool.submit(_upload_one, nxt)] = nxt
+                    except StopIteration:
+                        pass
+            except CancelledError:
+                skipped_count += 1
+            except _Skipped:
+                skipped_count += 1
             except Exception as exc:
                 failed_count += 1
-                item = futures[future]
-                click.echo(f"  FAILED: {item[1]} — {exc}", err=True)
+                click.echo(f"  FAILED: {done_item[1]} - {exc}", err=True)
+                if first_error is None:
+                    first_error = exc
+                    stop_event.set()
+                    # Cancel anything not started; running workers exit on
+                    # the next ``stop_event.is_set()`` check.
+                    for pending in list(active):
+                        pending.cancel()
             if progress:
                 progress.update(1)
 
@@ -513,17 +531,32 @@ def upload_dataset(
 
     elapsed = time.monotonic() - start_time
     rate = uploaded_bytes / elapsed if elapsed > 0 else 0
-    uploaded_count = total_files - failed_count
+    uploaded_count = total_files - failed_count - skipped_count
     click.echo(
         f"\nDone in {elapsed:.1f}s — uploaded {uploaded_count} files "
-        f"({human_bytes(uploaded_bytes)}, {human_bytes(rate)}/s), {failed_count} failed.",
+        f"({human_bytes(uploaded_bytes)}, {human_bytes(rate)}/s), {failed_count} failed, "
+        f"{skipped_count} skipped after first error.",
         err=True,
     )
 
+    if first_error is not None:
+        raise click.ClickException(f"Upload failed: {first_error}")
     if failed_count > 0:
         raise click.ClickException(f"{failed_count} file(s) failed to upload")
 
-    # --- Phase 7: Wait for indexing ---
+    dataset = client.datasets.create_from_manual_upload(
+        name=name,
+        slug=slug,
+        data_type=data_type,
+        is_sequence=is_sequence,
+        visibility=visibility,
+        create_metadata=create_metadata,
+        owner_name=owner,
+        industry=industry,
+        license=license_id,
+    )
+    click.echo(f"Dataset created: {dataset.uid} ({dataset.name})", err=True)
+
     if wait_after:
         click.echo(f"\nWaiting for dataset {dataset.uid} to finish indexing...", err=True)
         poll_start = time.monotonic()
@@ -552,27 +585,3 @@ def upload_dataset(
         ],
         json_keys=["uid", "name", "slug", "status", "item_count", "data_type"],
     )
-
-
-def _extra_args(filename: str) -> dict[str, str]:
-    """Return S3 ExtraArgs (headers) based on file extension."""
-    lower = filename.lower()
-    args: dict[str, str] = {}
-
-    # Cache-Control and Content-Encoding
-    if lower.endswith((".alp.gz", ".ali.gz")):
-        args["CacheControl"] = "private, immutable, max-age=31536000"
-        args["ContentEncoding"] = "gzip"
-    elif lower.endswith((".alp", ".ali")):
-        args["CacheControl"] = "private, immutable, max-age=31536000"
-    elif lower.endswith((".webp", ".jpg", ".jpeg", ".png")):
-        args["CacheControl"] = "private, immutable, max-age=31536000"
-    elif lower.endswith(".json"):
-        args["CacheControl"] = "no-cache"
-
-    # Content-Type
-    content_type, _ = mimetypes.guess_type(filename)
-    if content_type:
-        args["ContentType"] = content_type
-
-    return args

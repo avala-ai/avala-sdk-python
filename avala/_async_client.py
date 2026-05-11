@@ -9,6 +9,7 @@ from avala._async_http import AsyncHTTPTransport
 from avala._config import ClientConfig
 from avala.resources.agents import AsyncAgents
 from avala.resources.annotation_issues import AsyncAnnotationIssues
+from avala.resources.annotations import AsyncAnnotations
 from avala.resources.auto_label_jobs import AsyncAutoLabelJobs
 from avala.resources.consensus import AsyncConsensus
 from avala.resources.datasets import AsyncDatasets
@@ -44,6 +45,7 @@ class AsyncClient:
         self._transport = AsyncHTTPTransport(config)
         self.agents = AsyncAgents(self._transport)
         self.annotation_issues = AsyncAnnotationIssues(self._transport)
+        self.annotations = AsyncAnnotations(self._transport)
         self.auto_label_jobs = AsyncAutoLabelJobs(self._transport)
         self.consensus = AsyncConsensus(self._transport)
         self.datasets = AsyncDatasets(self._transport)

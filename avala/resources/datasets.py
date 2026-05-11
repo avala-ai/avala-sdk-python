@@ -105,6 +105,10 @@ class Datasets(BaseSyncResource):
         data = self._transport.request("GET", f"/datasets/{uid}/")
         return Dataset.model_validate(data)
 
+    def get_by_slug(self, owner: str, slug: str) -> Dataset:
+        data = self._transport.request("GET", f"/datasets/{owner}/{slug}/")
+        return Dataset.model_validate(data)
+
     def create(
         self,
         *,
@@ -145,6 +149,59 @@ class Datasets(BaseSyncResource):
         if license is not None:
             payload["license"] = license
         data = self._transport.request("POST", "/datasets/", json=payload)
+        return Dataset.model_validate(data)
+
+    def create_manual_upload_url(
+        self,
+        *,
+        dataset_name: str,
+        file_path_in_dataset: str,
+        content_length: int,
+    ) -> dict[str, Any]:
+        """Create a presigned POST target for Avala-managed local dataset uploads."""
+        result: dict[str, Any] = self._transport.request(
+            "POST",
+            "/datasets/manual-upload/file-upload-url/",
+            json={
+                "dataset_name": dataset_name,
+                "file_path_in_dataset": file_path_in_dataset,
+                "content_length": content_length,
+            },
+        )
+        return result
+
+    def create_from_manual_upload(
+        self,
+        *,
+        name: str,
+        slug: str,
+        data_type: str,
+        is_sequence: bool = False,
+        visibility: str = "private",
+        create_metadata: bool = True,
+        owner_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        industry: int | None = None,
+        license: int | None = None,
+    ) -> Dataset:
+        """Create a dataset from files uploaded with ``create_manual_upload_url``."""
+        payload: dict[str, Any] = {
+            "name": name,
+            "slug": slug,
+            "data_type": data_type,
+            "is_sequence": is_sequence,
+            "visibility": visibility,
+            "create_metadata": create_metadata,
+        }
+        if owner_name is not None:
+            payload["owner_name"] = owner_name
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if industry is not None:
+            payload["industry"] = industry
+        if license is not None:
+            payload["license"] = license
+        data = self._transport.request("POST", "/datasets/manual-upload/", json=payload)
         return Dataset.model_validate(data)
 
     def list_items(
@@ -275,6 +332,10 @@ class AsyncDatasets(BaseAsyncResource):
         data = await self._transport.request("GET", f"/datasets/{uid}/")
         return Dataset.model_validate(data)
 
+    async def get_by_slug(self, owner: str, slug: str) -> Dataset:
+        data = await self._transport.request("GET", f"/datasets/{owner}/{slug}/")
+        return Dataset.model_validate(data)
+
     async def create(
         self,
         *,
@@ -315,6 +376,59 @@ class AsyncDatasets(BaseAsyncResource):
         if license is not None:
             payload["license"] = license
         data = await self._transport.request("POST", "/datasets/", json=payload)
+        return Dataset.model_validate(data)
+
+    async def create_manual_upload_url(
+        self,
+        *,
+        dataset_name: str,
+        file_path_in_dataset: str,
+        content_length: int,
+    ) -> dict[str, Any]:
+        """Create a presigned POST target for Avala-managed local dataset uploads."""
+        result: dict[str, Any] = await self._transport.request(
+            "POST",
+            "/datasets/manual-upload/file-upload-url/",
+            json={
+                "dataset_name": dataset_name,
+                "file_path_in_dataset": file_path_in_dataset,
+                "content_length": content_length,
+            },
+        )
+        return result
+
+    async def create_from_manual_upload(
+        self,
+        *,
+        name: str,
+        slug: str,
+        data_type: str,
+        is_sequence: bool = False,
+        visibility: str = "private",
+        create_metadata: bool = True,
+        owner_name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        industry: int | None = None,
+        license: int | None = None,
+    ) -> Dataset:
+        """Create a dataset from files uploaded with ``create_manual_upload_url``."""
+        payload: dict[str, Any] = {
+            "name": name,
+            "slug": slug,
+            "data_type": data_type,
+            "is_sequence": is_sequence,
+            "visibility": visibility,
+            "create_metadata": create_metadata,
+        }
+        if owner_name is not None:
+            payload["owner_name"] = owner_name
+        if metadata is not None:
+            payload["metadata"] = metadata
+        if industry is not None:
+            payload["industry"] = industry
+        if license is not None:
+            payload["license"] = license
+        data = await self._transport.request("POST", "/datasets/manual-upload/", json=payload)
         return Dataset.model_validate(data)
 
     async def list_items(

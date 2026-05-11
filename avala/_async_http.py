@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from avala._config import ClientConfig
 from avala._http import _extract_cursor, _validate_path
 from avala._pagination import CursorPage
+from avala._redaction import redact
 from avala.errors import (
     AuthenticationError,
     AvalaError,
@@ -96,9 +97,26 @@ class AsyncHTTPTransport:
         message = f"HTTP {response.status_code}"
         try:
             body = response.json()
-            message = body.get("detail", message) if isinstance(body, dict) else message
+            # Pentest finding sdks/s3-4 (round 3) on PR #11315: only
+            # adopt ``body["detail"]`` as the exception message when
+            # it's actually a string. Structured details like
+            # ``{"detail": {"aws_secret_access_key": "..."}}`` would
+            # otherwise become a dict-typed message and bypass redaction
+            # — leaking the raw secret via ``str(exc)``. See
+            # ``_http.SyncHTTPTransport._raise_for_status`` for the
+            # full rationale.
+            if isinstance(body, dict):
+                detail = body.get("detail")
+                if isinstance(detail, str):
+                    message = detail
         except Exception:
             pass
+
+        # Pentest finding sdks/s3-4 (MED, CWE-200/209). See
+        # ``_http.SyncHTTPTransport._raise_for_status`` for the rationale —
+        # both transports share the same redaction policy.
+        message = redact(message) if isinstance(message, str) else message
+        body = redact(body)
 
         status = response.status_code
         if status == 401:
