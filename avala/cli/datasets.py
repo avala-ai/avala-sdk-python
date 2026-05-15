@@ -9,7 +9,6 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
 import click
-
 from avala.cli._output import human_bytes, print_detail, print_table
 
 if TYPE_CHECKING:
@@ -32,10 +31,25 @@ def datasets() -> None:
 
 
 @datasets.command("list")
-@click.option("--data-type", type=str, default=None, help="Filter by data type (image, video, lidar, mcap, splat)")
-@click.option("--name", type=str, default=None, help="Filter by name (case-insensitive substring match)")
+@click.option(
+    "--data-type",
+    type=str,
+    default=None,
+    help="Filter by data type (image, video, lidar, mcap, splat)",
+)
+@click.option(
+    "--name",
+    type=str,
+    default=None,
+    help="Filter by name (case-insensitive substring match)",
+)
 @click.option("--status", type=str, default=None, help="Filter by status (creating, created)")
-@click.option("--visibility", type=str, default=None, help="Filter by visibility (private, public)")
+@click.option(
+    "--visibility",
+    type=str,
+    default=None,
+    help="Filter by visibility (private, public)",
+)
 @click.option("--limit", type=int, default=None, help="Maximum number of results")
 @click.pass_context
 def list_datasets(
@@ -48,7 +62,13 @@ def list_datasets(
 ) -> None:
     """List datasets."""
     client = ctx.obj["client"]
-    page = client.datasets.list(data_type=data_type, name=name, status=status, visibility=visibility, limit=limit)
+    page = client.datasets.list(
+        data_type=data_type,
+        name=name,
+        status=status,
+        visibility=visibility,
+        limit=limit,
+    )
     rows = [(d.uid, d.name, d.slug, str(d.item_count), d.data_type or "—") for d in page.items]
     print_table(
         "Datasets",
@@ -76,7 +96,15 @@ def get_dataset(ctx: click.Context, uid: str) -> None:
             ("Created", str(d.created_at or "—")),
             ("Updated", str(d.updated_at or "—")),
         ],
-        json_keys=["uid", "name", "slug", "item_count", "data_type", "created_at", "updated_at"],
+        json_keys=[
+            "uid",
+            "name",
+            "slug",
+            "item_count",
+            "data_type",
+            "created_at",
+            "updated_at",
+        ],
     )
 
 
@@ -134,12 +162,22 @@ def get_frame_cmd(ctx: click.Context, owner: str, slug: str, sequence_uid: str, 
             ("Cameras", str(len(frame.images or []))),
             (
                 "Device position",
-                f"x={frame.device_position.x} y={frame.device_position.y} z={frame.device_position.z}"
-                if frame.device_position
-                else "—",
+                (
+                    f"x={frame.device_position.x} y={frame.device_position.y} z={frame.device_position.z}"
+                    if frame.device_position
+                    else "—"
+                ),
             ),
         ],
-        json_keys=["frame_index", "key", "model", "xi", "alpha", "device_position", "device_heading"],
+        json_keys=[
+            "frame_index",
+            "key",
+            "model",
+            "xi",
+            "alpha",
+            "device_position",
+            "device_heading",
+        ],
     )
 
 
@@ -227,14 +265,17 @@ def health_cmd(ctx: click.Context, owner: str, slug: str) -> None:
     type=click.Choice(["image", "video", "lidar", "mcap", "splat"]),
     help="Type of data in the dataset",
 )
-@click.option("--is-sequence", is_flag=True, default=False, help="Dataset contains sequences")
 @click.option(
     "--visibility",
     default="private",
     type=click.Choice(["private", "public"]),
     help="Dataset visibility (default: private)",
 )
-@click.option("--create-metadata/--no-create-metadata", default=True, help="Create dataset metadata")
+@click.option(
+    "--create-metadata/--no-create-metadata",
+    default=True,
+    help="Create dataset metadata",
+)
 @click.option("--provider-config", default=None, help="Provider config as JSON string")
 @click.option("--owner", default=None, help="Dataset owner username or email")
 @click.pass_context
@@ -243,7 +284,6 @@ def create_dataset(
     name: str,
     slug: str,
     data_type: str,
-    is_sequence: bool,
     visibility: str,
     create_metadata: bool,
     provider_config: str | None,
@@ -256,7 +296,6 @@ def create_dataset(
         name=name,
         slug=slug,
         data_type=data_type,
-        is_sequence=is_sequence,
         visibility=visibility,
         create_metadata=create_metadata,
         provider_config=parsed_config,
@@ -268,11 +307,23 @@ def create_dataset(
 @datasets.command("wait")
 @click.argument("uid")
 @click.option("--status", default="created", help="Target status to wait for (default: created)")
-@click.option("--timeout", type=float, default=3600.0, help="Maximum seconds to wait (default: 3600)")
+@click.option(
+    "--timeout",
+    type=float,
+    default=3600.0,
+    help="Maximum seconds to wait (default: 3600)",
+)
 @click.option("--interval", type=float, default=10.0, help="Seconds between polls (default: 10)")
 @click.option("--quiet", is_flag=True, default=False, help="Suppress progress output")
 @click.pass_context
-def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, interval: float, quiet: bool) -> None:
+def wait_dataset(
+    ctx: click.Context,
+    uid: str,
+    status: str,
+    timeout: float,
+    interval: float,
+    quiet: bool,
+) -> None:
     """Wait for a dataset to reach a target status."""
     client = ctx.obj["client"]
     start = time.monotonic()
@@ -302,7 +353,16 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
             ("Created", str(d.created_at or "—")),
             ("Updated", str(d.updated_at or "—")),
         ],
-        json_keys=["uid", "name", "slug", "status", "item_count", "data_type", "created_at", "updated_at"],
+        json_keys=[
+            "uid",
+            "name",
+            "slug",
+            "status",
+            "item_count",
+            "data_type",
+            "created_at",
+            "updated_at",
+        ],
     )
 
 
@@ -313,7 +373,12 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
     type=click.Path(exists=True),
     help="Local file or directory containing files to upload",
 )
-@click.option("--dataset", "dataset_uid", default=None, help="Deprecated; local upload creates a new dataset")
+@click.option(
+    "--dataset",
+    "dataset_uid",
+    default=None,
+    help="Deprecated; local upload creates a new dataset",
+)
 @click.option(
     "--storage-config",
     "storage_config_uid",
@@ -328,7 +393,6 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
     type=click.Choice(["image", "video", "lidar", "mcap", "splat"]),
     help="Data type",
 )
-@click.option("--is-sequence", is_flag=True, default=False, help="Dataset contains sequences")
 @click.option("--owner", default=None, help="Dataset owner username or email")
 @click.option(
     "--visibility",
@@ -338,10 +402,24 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
 )
 @click.option("--industry", type=int, default=None, help="Industry ID for the dataset")
 @click.option("--license", "license_id", type=int, default=None, help="License ID for the dataset")
-@click.option("--create-metadata/--no-create-metadata", default=True, help="Create dataset metadata")
+@click.option(
+    "--create-metadata/--no-create-metadata",
+    default=True,
+    help="Create dataset metadata",
+)
 @click.option("--aws-profile", default=None, help="Deprecated; ignored for Avala-managed uploads")
-@click.option("--workers", type=int, default=8, help="Number of parallel upload threads (default: 8)")
-@click.option("--dry-run", is_flag=True, default=False, help="Preview what would be uploaded without uploading")
+@click.option(
+    "--workers",
+    type=int,
+    default=8,
+    help="Number of parallel upload threads (default: 8)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Preview what would be uploaded without uploading",
+)
 @click.option(
     "--wait",
     "wait_after",
@@ -349,7 +427,12 @@ def wait_dataset(ctx: click.Context, uid: str, status: str, timeout: float, inte
     default=False,
     help="Wait for dataset indexing after upload (only meaningful for newly created datasets)",
 )
-@click.option("--wait-timeout", type=float, default=3600.0, help="Timeout in seconds for --wait (default: 3600)")
+@click.option(
+    "--wait-timeout",
+    type=float,
+    default=3600.0,
+    help="Timeout in seconds for --wait (default: 3600)",
+)
 @click.pass_context
 def upload_dataset(
     ctx: click.Context,
@@ -359,7 +442,6 @@ def upload_dataset(
     name: str,
     slug: str,
     data_type: str,
-    is_sequence: bool,
     owner: str | None,
     visibility: str,
     industry: int | None,
@@ -426,7 +508,10 @@ def upload_dataset(
         if total_files > 20:
             click.echo(f"  ... and {total_files - 20} more files", err=True)
         click.echo(f"\nTotal: {total_files} files ({human_bytes(total_bytes)})", err=True)
-        click.echo(f"Would create dataset: name={name!r}, slug={slug!r}, data_type={data_type!r}", err=True)
+        click.echo(
+            f"Would create dataset: name={name!r}, slug={slug!r}, data_type={data_type!r}",
+            err=True,
+        )
         return
 
     failed_count = 0
@@ -548,7 +633,6 @@ def upload_dataset(
         name=name,
         slug=slug,
         data_type=data_type,
-        is_sequence=is_sequence,
         visibility=visibility,
         create_metadata=create_metadata,
         owner_name=owner,
@@ -570,7 +654,10 @@ def upload_dataset(
             )
         except TimeoutError as exc:
             raise click.ClickException(str(exc))
-        click.echo(f"Dataset {dataset.uid} is ready (status={dataset.status}, items={dataset.item_count}).", err=True)
+        click.echo(
+            f"Dataset {dataset.uid} is ready (status={dataset.status}, items={dataset.item_count}).",
+            err=True,
+        )
 
     # --- Final output ---
     print_detail(

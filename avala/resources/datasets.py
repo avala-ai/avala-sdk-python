@@ -69,7 +69,7 @@ def _build_calibration_from_sequence(sequence: DatasetSequence) -> DatasetCalibr
                 cy=img.get("cy"),
                 model=img.get("model") or img.get("camera_model") or frame0.get("model"),
                 xi=img.get("xi") if img.get("xi") is not None else frame0.get("xi"),
-                alpha=img.get("alpha") if img.get("alpha") is not None else frame0.get("alpha"),
+                alpha=(img.get("alpha") if img.get("alpha") is not None else frame0.get("alpha")),
             )
         )
     return DatasetCalibration(sequence_uid=sequence.uid, cameras=cameras)
@@ -115,7 +115,6 @@ class Datasets(BaseSyncResource):
         name: str,
         slug: str,
         data_type: str,
-        is_sequence: bool = False,
         visibility: str = "private",
         create_metadata: bool = True,
         provider_config: dict[str, Any] | None = None,
@@ -130,7 +129,6 @@ class Datasets(BaseSyncResource):
             "name": name,
             "slug": slug,
             "data_type": data_type,
-            "is_sequence": is_sequence,
             "visibility": visibility,
             "create_metadata": create_metadata,
         }
@@ -176,7 +174,6 @@ class Datasets(BaseSyncResource):
         name: str,
         slug: str,
         data_type: str,
-        is_sequence: bool = False,
         visibility: str = "private",
         create_metadata: bool = True,
         owner_name: str | None = None,
@@ -189,7 +186,6 @@ class Datasets(BaseSyncResource):
             "name": name,
             "slug": slug,
             "data_type": data_type,
-            "is_sequence": is_sequence,
             "visibility": visibility,
             "create_metadata": create_metadata,
         }
@@ -205,7 +201,12 @@ class Datasets(BaseSyncResource):
         return Dataset.model_validate(data)
 
     def list_items(
-        self, owner: str, slug: str, *, limit: int | None = None, cursor: str | None = None
+        self,
+        owner: str,
+        slug: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> CursorPage[DatasetItem]:
         params: dict[str, Any] = {}
         if limit is not None:
@@ -219,7 +220,12 @@ class Datasets(BaseSyncResource):
         return DatasetItem.model_validate(data)
 
     def list_sequences(
-        self, owner: str, slug: str, *, limit: int | None = None, cursor: str | None = None
+        self,
+        owner: str,
+        slug: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> CursorPage[DatasetSequence]:
         params: dict[str, Any] = {}
         if limit is not None:
@@ -227,7 +233,9 @@ class Datasets(BaseSyncResource):
         if cursor is not None:
             params["cursor"] = cursor
         return self._transport.request_page(
-            f"/datasets/{owner}/{slug}/sequences/", DatasetSequence, params=params or None
+            f"/datasets/{owner}/{slug}/sequences/",
+            DatasetSequence,
+            params=params or None,
         )
 
     def get_sequence(self, owner: str, slug: str, sequence_uid: str) -> DatasetSequence:
@@ -342,7 +350,6 @@ class AsyncDatasets(BaseAsyncResource):
         name: str,
         slug: str,
         data_type: str,
-        is_sequence: bool = False,
         visibility: str = "private",
         create_metadata: bool = True,
         provider_config: dict[str, Any] | None = None,
@@ -357,7 +364,6 @@ class AsyncDatasets(BaseAsyncResource):
             "name": name,
             "slug": slug,
             "data_type": data_type,
-            "is_sequence": is_sequence,
             "visibility": visibility,
             "create_metadata": create_metadata,
         }
@@ -403,7 +409,6 @@ class AsyncDatasets(BaseAsyncResource):
         name: str,
         slug: str,
         data_type: str,
-        is_sequence: bool = False,
         visibility: str = "private",
         create_metadata: bool = True,
         owner_name: str | None = None,
@@ -416,7 +421,6 @@ class AsyncDatasets(BaseAsyncResource):
             "name": name,
             "slug": slug,
             "data_type": data_type,
-            "is_sequence": is_sequence,
             "visibility": visibility,
             "create_metadata": create_metadata,
         }
@@ -432,7 +436,12 @@ class AsyncDatasets(BaseAsyncResource):
         return Dataset.model_validate(data)
 
     async def list_items(
-        self, owner: str, slug: str, *, limit: int | None = None, cursor: str | None = None
+        self,
+        owner: str,
+        slug: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> CursorPage[DatasetItem]:
         params: dict[str, Any] = {}
         if limit is not None:
@@ -448,7 +457,12 @@ class AsyncDatasets(BaseAsyncResource):
         return DatasetItem.model_validate(data)
 
     async def list_sequences(
-        self, owner: str, slug: str, *, limit: int | None = None, cursor: str | None = None
+        self,
+        owner: str,
+        slug: str,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
     ) -> CursorPage[DatasetSequence]:
         params: dict[str, Any] = {}
         if limit is not None:
@@ -456,7 +470,9 @@ class AsyncDatasets(BaseAsyncResource):
         if cursor is not None:
             params["cursor"] = cursor
         return await self._transport.request_page(
-            f"/datasets/{owner}/{slug}/sequences/", DatasetSequence, params=params or None
+            f"/datasets/{owner}/{slug}/sequences/",
+            DatasetSequence,
+            params=params or None,
         )
 
     async def get_sequence(self, owner: str, slug: str, sequence_uid: str) -> DatasetSequence:

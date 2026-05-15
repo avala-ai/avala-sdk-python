@@ -6,9 +6,8 @@ pytest.importorskip("click", reason="CLI dependencies not installed (pip install
 
 import httpx  # noqa: E402
 import respx  # noqa: E402
-from click.testing import CliRunner  # noqa: E402
-
 from avala.cli import main  # noqa: E402
+from click.testing import CliRunner  # noqa: E402
 
 
 @respx.mock
@@ -345,7 +344,6 @@ def test_datasets_create_with_provider_config():
             "s3-dataset",
             "--data-type",
             "image",
-            "--is-sequence",
             "--provider-config",
             '{"provider": "aws_s3", "s3_bucket_name": "my-bucket"}',
             "--owner",
@@ -545,8 +543,20 @@ _ORGS_LIST_RESPONSE = {
 
 _DATASETS_LIST_RESPONSE_STATUS = {
     "results": [
-        {"uid": "ds-1", "name": "Highway LiDAR", "slug": "highway-lidar", "item_count": 100, "data_type": "lidar"},
-        {"uid": "ds-2", "name": "Urban Camera", "slug": "urban-camera", "item_count": 50, "data_type": "image"},
+        {
+            "uid": "ds-1",
+            "name": "Highway LiDAR",
+            "slug": "highway-lidar",
+            "item_count": 100,
+            "data_type": "lidar",
+        },
+        {
+            "uid": "ds-2",
+            "name": "Urban Camera",
+            "slug": "urban-camera",
+            "item_count": 50,
+            "data_type": "image",
+        },
     ],
     "next": None,
     "previous": None,

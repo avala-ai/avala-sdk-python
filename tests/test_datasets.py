@@ -4,7 +4,6 @@ import json
 
 import httpx
 import respx
-
 from avala import Client
 
 BASE_URL = "https://api.avala.ai/api/v1"
@@ -106,7 +105,12 @@ def test_get_dataset_by_slug():
                 "data_type": "lidar",
                 "is_sequence": True,
                 "predefined_labels": [
-                    {"name": "car", "label_code": 1, "locked": False, "is_countable": True},
+                    {
+                        "name": "car",
+                        "label_code": 1,
+                        "locked": False,
+                        "is_countable": True,
+                    },
                 ],
             },
         )
@@ -128,7 +132,14 @@ def test_list_datasets_with_pagination():
         return_value=httpx.Response(
             200,
             json={
-                "results": [{"uid": "aaa", "name": "Dataset 1", "slug": "ds-1", "item_count": 10}],
+                "results": [
+                    {
+                        "uid": "aaa",
+                        "name": "Dataset 1",
+                        "slug": "ds-1",
+                        "item_count": 10,
+                    }
+                ],
                 "next": f"{BASE_URL}/datasets/?cursor=abc123",
                 "previous": None,
             },
@@ -144,7 +155,7 @@ def test_list_datasets_with_pagination():
 @respx.mock
 def test_create_dataset():
     """Datasets.create() sends a POST and returns a Dataset."""
-    respx.post(f"{BASE_URL}/datasets/").mock(
+    route = respx.post(f"{BASE_URL}/datasets/").mock(
         return_value=httpx.Response(
             201,
             json={
@@ -161,11 +172,12 @@ def test_create_dataset():
         name="New Dataset",
         slug="new-dataset",
         data_type="lidar",
-        is_sequence=True,
         visibility="private",
     )
     assert dataset.uid == "new-dataset-uid"
     assert dataset.name == "New Dataset"
+    body = json.loads(route.calls[0].request.content)
+    assert "is_sequence" not in body
     client.close()
 
 
@@ -227,7 +239,6 @@ def test_create_dataset_with_organization_id():
         name="Org Dataset",
         slug="org-dataset",
         data_type="lidar",
-        is_sequence=True,
         organization_id=265,
         gpu_texture_format="ktx",
         industry=265,
@@ -243,6 +254,7 @@ def test_create_dataset_with_organization_id():
     assert body["industry"] == 265
     assert body["license"] == 67
     assert body["metadata"] == {"key": "value"}
+    assert "is_sequence" not in body
     client.close()
 
 
@@ -304,6 +316,7 @@ def test_create_from_manual_upload():
     assert body["industry"] == 10
     assert body["license"] == 20
     assert "provider_config" not in body
+    assert "is_sequence" not in body
     client.close()
 
 
