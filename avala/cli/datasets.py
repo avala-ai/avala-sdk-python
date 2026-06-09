@@ -278,6 +278,11 @@ def health_cmd(ctx: click.Context, owner: str, slug: str) -> None:
 )
 @click.option("--provider-config", default=None, help="Provider config as JSON string")
 @click.option("--owner", default=None, help="Dataset owner username or email")
+@click.option(
+    "--organization-uid",
+    default=None,
+    help="Organization public UID to own the dataset (preferred over numeric organization_id for API users)",
+)
 @click.pass_context
 def create_dataset(
     ctx: click.Context,
@@ -288,6 +293,7 @@ def create_dataset(
     create_metadata: bool,
     provider_config: str | None,
     owner: str | None,
+    organization_uid: str | None,
 ) -> None:
     """Create a new dataset."""
     client = ctx.obj["client"]
@@ -300,6 +306,7 @@ def create_dataset(
         create_metadata=create_metadata,
         provider_config=parsed_config,
         owner_name=owner,
+        organization_uid=organization_uid,
     )
     click.echo(f"Dataset created: {d.uid} ({d.name})")
 

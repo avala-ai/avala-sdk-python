@@ -120,6 +120,7 @@ class Datasets(BaseSyncResource):
         provider_config: dict[str, Any] | None = None,
         owner_name: str | None = None,
         organization_id: int | None = None,
+        organization_uid: str | None = None,
         gpu_texture_format: str | None = None,
         metadata: dict[str, Any] | None = None,
         industry: int | None = None,
@@ -138,6 +139,8 @@ class Datasets(BaseSyncResource):
             payload["owner_name"] = owner_name
         if organization_id is not None:
             payload["organization_id"] = organization_id
+        if organization_uid is not None:
+            payload["organization_uid"] = organization_uid
         if gpu_texture_format is not None:
             payload["gpu_texture_format"] = gpu_texture_format
         if metadata is not None:
@@ -355,6 +358,7 @@ class AsyncDatasets(BaseAsyncResource):
         provider_config: dict[str, Any] | None = None,
         owner_name: str | None = None,
         organization_id: int | None = None,
+        organization_uid: str | None = None,
         gpu_texture_format: str | None = None,
         metadata: dict[str, Any] | None = None,
         industry: int | None = None,
@@ -373,6 +377,8 @@ class AsyncDatasets(BaseAsyncResource):
             payload["owner_name"] = owner_name
         if organization_id is not None:
             payload["organization_id"] = organization_id
+        if organization_uid is not None:
+            payload["organization_uid"] = organization_uid
         if gpu_texture_format is not None:
             payload["gpu_texture_format"] = gpu_texture_format
         if metadata is not None:

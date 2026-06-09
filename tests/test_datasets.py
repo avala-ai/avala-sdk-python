@@ -259,6 +259,36 @@ def test_create_dataset_with_organization_id():
 
 
 @respx.mock
+def test_create_dataset_with_organization_uid():
+    """Datasets.create() includes organization_uid when supplied."""
+    route = respx.post(f"{BASE_URL}/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "org-dataset-uid",
+                "name": "Org Dataset",
+                "slug": "org-dataset",
+                "item_count": 0,
+                "data_type": "image",
+            },
+        )
+    )
+    client = Client(api_key="test-key")
+    dataset = client.datasets.create(
+        name="Org Dataset",
+        slug="org-dataset",
+        data_type="image",
+        organization_uid="ef08fe22-7131-4bca-b0c3-c544b49072ad",
+    )
+    assert dataset.uid == "org-dataset-uid"
+    assert route.called
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert body["organization_uid"] == "ef08fe22-7131-4bca-b0c3-c544b49072ad"
+    client.close()
+
+
+@respx.mock
 def test_create_manual_upload_url():
     """Datasets.create_manual_upload_url() sends the local-upload presign payload."""
     route = respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(

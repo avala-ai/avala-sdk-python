@@ -4,6 +4,8 @@ import pytest
 
 pytest.importorskip("click", reason="CLI dependencies not installed (pip install avala[cli])")
 
+import json  # noqa: E402
+
 import httpx  # noqa: E402
 import respx  # noqa: E402
 from avala.cli import main  # noqa: E402
@@ -352,6 +354,44 @@ def test_datasets_create_with_provider_config():
     )
     assert result.exit_code == 0
     assert "s3-ds-uid" in result.output
+
+
+@respx.mock
+def test_datasets_create_with_organization_uid():
+    route = respx.post("https://api.avala.ai/api/v1/datasets/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "org-ds-uid",
+                "name": "Org Dataset",
+                "slug": "org-dataset",
+                "item_count": 0,
+                "data_type": "image",
+            },
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--api-key",
+            "test-key",
+            "datasets",
+            "create",
+            "--name",
+            "Org Dataset",
+            "--slug",
+            "org-dataset",
+            "--data-type",
+            "image",
+            "--organization-uid",
+            "ef08fe22-7131-4bca-b0c3-c544b49072ad",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "org-ds-uid" in result.output
+    body = json.loads(route.calls[0].request.content)
+    assert body["organization_uid"] == "ef08fe22-7131-4bca-b0c3-c544b49072ad"
 
 
 @respx.mock
