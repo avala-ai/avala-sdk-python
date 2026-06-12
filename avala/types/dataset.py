@@ -54,6 +54,7 @@ class DatasetSequence(BaseModel):
     allow_lidar_calibration: Optional[bool] = None
     lidar_calibration_enabled: Optional[bool] = None
     camera_calibration_enabled: Optional[bool] = None
+    coc_timeline: Optional[List[Dict[str, Any]]] = None
 
 
 class Vec3(BaseModel):
