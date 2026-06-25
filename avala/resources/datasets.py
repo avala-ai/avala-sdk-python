@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Dict, List, Tuple
 
 from avala._pagination import CursorPage
 from avala.resources._base import BaseAsyncResource, BaseSyncResource
@@ -22,6 +22,22 @@ from avala.types.dataset import (
 )
 
 _MIN_INTERVAL = 1.0
+
+
+def gather_local_files(source: str) -> list[tuple[str, str]]:
+    """Return ``(local_path, file_path_in_dataset)`` for a file or directory tree."""
+    import os
+    from pathlib import Path
+
+    root_path = Path(source)
+    if root_path.is_file():
+        return [(str(root_path), root_path.name)]
+    out: list[tuple[str, str]] = []
+    for root, _dirs, files in os.walk(root_path):
+        for fname in sorted(files):
+            local_path = Path(root) / fname
+            out.append((str(local_path), local_path.relative_to(root_path).as_posix()))
+    return out
 
 
 def _build_frame(frames: list[dict[str, Any]], frame_idx: int, sequence_uid: str) -> DatasetFrame:
@@ -202,6 +218,132 @@ class Datasets(BaseSyncResource):
             payload["license"] = license
         data = self._transport.request("POST", "/datasets/manual-upload/", json=payload)
         return Dataset.model_validate(data)
+
+    def upload_files(
+        self,
+        *,
+        dataset_name: str,
+        files: List[Tuple[str, str]],
+        workers: int = 8,
+        on_progress: Callable[[str, int], None] | None = None,
+    ) -> int:
+        """Upload local files to Avala-managed storage for a (to-be-created) dataset.
+
+        ``files`` is a list of ``(local_path, file_path_in_dataset)``. Uploads run in
+        parallel with a bounded active set and **fail fast** — the first error stops
+        new uploads and is re-raised. Returns total bytes uploaded. Finalize the
+        dataset with :meth:`create_from_manual_upload` (or use :meth:`create_from_local`).
+        """
+        import mimetypes
+        import os
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        import httpx
+
+        items: List[Tuple[str, str]] = list(files)
+        if not items:
+            return 0
+
+        stop = threading.Event()
+        uploaded_bytes = 0
+
+        def _upload_one(item: Tuple[str, str]) -> int:
+            local_path, relative = item
+            if stop.is_set():
+                return 0
+            size = os.path.getsize(local_path)
+            info = self.create_manual_upload_url(
+                dataset_name=dataset_name, file_path_in_dataset=relative, content_length=size
+            )
+            if stop.is_set():
+                return 0
+            fields = info["fields"]
+            content_type = (
+                fields.get("Content-Type") or mimetypes.guess_type(local_path)[0] or "application/octet-stream"
+            )
+            with open(local_path, "rb") as fh:
+                resp = httpx.post(
+                    info["url"],
+                    data=fields,
+                    files={"file": (os.path.basename(local_path), fh, content_type)},
+                    timeout=None,
+                )
+                resp.raise_for_status()
+            if on_progress is not None:
+                on_progress(relative, size)
+            return size
+
+        first_error: Exception | None = None
+        iterator = iter(items)
+        active: Dict[Any, Tuple[str, str]] = {}
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            for _ in range(max(1, workers)):
+                try:
+                    nxt = next(iterator)
+                except StopIteration:
+                    break
+                active[pool.submit(_upload_one, nxt)] = nxt
+            while active:
+                future = next(as_completed(active))
+                active.pop(future)
+                try:
+                    uploaded_bytes += future.result()
+                    if first_error is None and not stop.is_set():
+                        try:
+                            nxt = next(iterator)
+                            active[pool.submit(_upload_one, nxt)] = nxt
+                        except StopIteration:
+                            pass
+                except Exception as exc:  # noqa: BLE001 - fail fast, re-raised below
+                    if first_error is None:
+                        first_error = exc
+                        stop.set()
+                        for pending in list(active):
+                            pending.cancel()
+        if first_error is not None:
+            raise first_error
+        return uploaded_bytes
+
+    def create_from_local(
+        self,
+        *,
+        source: str,
+        name: str,
+        slug: str,
+        data_type: str,
+        visibility: str = "private",
+        create_metadata: bool = True,
+        owner_name: str | None = None,
+        industry: int | None = None,
+        license: int | None = None,
+        workers: int = 8,
+        on_progress: Callable[[str, int], None] | None = None,
+        wait: bool = False,
+        wait_timeout: float = 3600.0,
+    ) -> Dataset:
+        """Upload a local file or directory and create a dataset from it.
+
+        Convenience wrapper around :meth:`upload_files` + :meth:`create_from_manual_upload`.
+        Set ``wait=True`` to block until indexing completes.
+        """
+        files = gather_local_files(source)
+        if not files:
+            raise ValueError(f"no files found in {source}")
+        self.upload_files(dataset_name=name, files=files, workers=workers, on_progress=on_progress)
+        dataset = self.create_from_manual_upload(
+            name=name,
+            slug=slug,
+            data_type=data_type,
+            visibility=visibility,
+            create_metadata=create_metadata,
+            owner_name=owner_name,
+            industry=industry,
+            license=license,
+        )
+        if wait:
+            dataset = self.wait(dataset.uid, status="created", interval=10.0, timeout=wait_timeout)
+        return dataset
 
     def list_items(
         self,

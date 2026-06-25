@@ -16,6 +16,29 @@ dev = ["pytest>=7", "respx>=0.20", "mypy>=1", "ruff>=0.1", "pytest-asyncio>=0.21
 cli = ["click>=8.0", "rich>=13.0", "tqdm>=4.60"]
 # PyTorch data loading (avala.torch) — stream annotated frames into training, no export step.
 torch = ["torch>=2.0", "pillow>=9.0"]
+# LeRobot integration: Avala -> LeRobot export (avala.lerobot) and
+# LeRobot -> Avala MCAP import (avala.importers.lerobot, writes
+# foxglove.CompressedImage + Struct MCAP per episode).
+# NOTE: lerobot requires Python 3.12+; this extra is unusable on 3.9-3.11.
+lerobot = [
+    "lerobot>=0.5,<0.6",
+    "mcap>=1.1",
+    "mcap-protobuf-support>=0.5",
+    "foxglove-schemas-protobuf>=0.3",
+    "numpy>=2.0",
+    "pillow>=9.0",
+]
+# ROS bag -> Avala MCAP import (avala.importers.rosbag). Reads ROS1 .bag / ROS2 .db3
+# with the pure-Python rosbags lib (no ROS install) and re-encodes camera topics to
+# foxglove.CompressedImage MCAP.
+rosbag = [
+    "rosbags>=0.9",
+    "mcap>=1.1",
+    "mcap-protobuf-support>=0.5",
+    "foxglove-schemas-protobuf>=0.3",
+    "numpy>=1.23",
+    "pillow>=9.0",
+]
 
 [project.scripts]
 avala = "avala.cli:main"
@@ -28,6 +51,20 @@ line-length = 120
 
 [tool.mypy]
 strict = true
-# avala/torch subclasses untyped third-party torch base classes; strict typing there
-# isn't productive and torch isn't a base/CI dependency. (cli/ excluded for similar reasons.)
-exclude = ["avala/cli/", "avala/torch/"]
+# avala/torch, avala/lerobot, and the lerobot/rosbag importers integrate untyped,
+# conditionally-installed third-party stacks (torch / lerobot / rosbags / mcap+foxglove
+# protobuf); strict typing there isn't productive and they're not base/CI deps. (cli/ too.)
+exclude = [
+    "avala/cli/",
+    "avala/torch/",
+    "avala/lerobot/",
+    "avala/importers/lerobot\\.py",
+    "avala/importers/rosbag\\.py",
+]
+
+# importers/__init__ imports these adapters eagerly to register them; skip following so
+# strict checking of the rest of avala/importers/ doesn't pull in the excluded modules.
+[[tool.mypy.overrides]]
+module = ["avala.importers.lerobot", "avala.importers.rosbag"]
+follow_imports = "skip"
+ignore_missing_imports = true
