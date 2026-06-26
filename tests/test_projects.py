@@ -9,11 +9,15 @@ from avala import Client
 
 BASE_URL = "https://api.avala.ai/api/v1"
 
+# The SDK lists/gets projects via the user-scoped route (``/users/me/projects/``),
+# not the staff-only top-level ``/projects/`` admin endpoint.
+PROJECTS_URL = f"{BASE_URL}/users/me/projects/"
+
 
 @respx.mock
 def test_list_projects():
     """Projects.list() returns a CursorPage of Project objects."""
-    respx.get(f"{BASE_URL}/projects/").mock(
+    respx.get(PROJECTS_URL).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -44,7 +48,7 @@ def test_list_projects():
 def test_get_project():
     """Projects.get() returns a single Project by uid."""
     uid = "proj-001"
-    respx.get(f"{BASE_URL}/projects/{uid}/").mock(
+    respx.get(f"{PROJECTS_URL}{uid}/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -65,15 +69,15 @@ def test_get_project():
 @respx.mock
 def test_list_projects_pagination_cursor():
     """Projects.list() passes cursor param and extracts next_cursor from response."""
-    respx.get(f"{BASE_URL}/projects/").mock(
+    respx.get(PROJECTS_URL).mock(
         return_value=httpx.Response(
             200,
             json={
                 "results": [
                     {"uid": "proj-002", "name": "Project Beta"},
                 ],
-                "next": f"{BASE_URL}/projects/?cursor=next-page-token",
-                "previous": f"{BASE_URL}/projects/?cursor=prev-page-token",
+                "next": f"{PROJECTS_URL}?cursor=next-page-token",
+                "previous": f"{PROJECTS_URL}?cursor=prev-page-token",
             },
         )
     )

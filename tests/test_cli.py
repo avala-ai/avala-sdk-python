@@ -178,7 +178,7 @@ def test_datasets_get():
 
 @respx.mock
 def test_projects_list():
-    respx.get("https://api.avala.ai/api/v1/projects/").mock(
+    respx.get("https://api.avala.ai/api/v1/users/me/projects/").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -639,7 +639,7 @@ def _mock_status_endpoints(*, fleet_error: bool = False) -> None:
     respx.get("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(200, json=_DATASETS_LIST_RESPONSE_STATUS)
     )
-    respx.get("https://api.avala.ai/api/v1/projects/").mock(
+    respx.get("https://api.avala.ai/api/v1/users/me/projects/").mock(
         return_value=httpx.Response(200, json=_PROJECTS_LIST_RESPONSE_STATUS)
     )
     respx.get("https://api.avala.ai/api/v1/exports/").mock(

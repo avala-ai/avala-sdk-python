@@ -39,8 +39,14 @@ def _unique(prefix: str) -> str:
     return f"{prefix}-e2e-{uuid.uuid4().hex[:8]}"
 
 
-# ── read-only list sweep: every top-level resource answers without error ────────
-# (name, callable taking the client) — kept to resources whose list() needs no args.
+# ── read-only list sweep: every customer-accessible top-level resource ──────────
+# (name, callable taking the client) — resources whose list() needs no args and is
+# reachable with a customer API key.
+#
+# NOTE: ``projects.list`` now targets the user-scoped route (GET /users/me/projects/),
+# which is filtered to the key owner's accessible projects and permits customers — the
+# top-level GET /projects/ is a staff-only admin endpoint (lists every project) and a
+# customer key would get 403 there. See avala/resources/projects.py.
 _LIST_RESOURCES = [
     ("datasets", lambda c: c.datasets.list(limit=1)),
     ("projects", lambda c: c.projects.list(limit=1)),

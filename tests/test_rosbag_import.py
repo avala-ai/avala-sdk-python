@@ -51,7 +51,14 @@ def _make_bag(
     Header = ts.types["std_msgs/msg/Header"]
     Time = ts.types["builtin_interfaces/msg/Time"]
 
-    writer = Writer(bag_dir)
+    # rosbags >=0.10 made Writer's `version` kwarg required (older versions don't
+    # accept it); pass it only when present so this works across versions.
+    import inspect
+
+    wkw = {}
+    if "version" in inspect.signature(Writer.__init__).parameters:
+        wkw["version"] = getattr(Writer, "VERSION_LATEST", 9)
+    writer = Writer(bag_dir, **wkw)
     writer.open()
     try:
         if compressed:
