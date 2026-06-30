@@ -41,6 +41,26 @@ class TestRedactStrings:
         assert "NotARealKeyJustATestValueXYZ123456" not in out
         assert "[redacted]" in out
 
+    def test_redacts_modern_hyphenated_provider_keys(self):
+        # Bug-bounty: OpenAI ``sk-proj-...`` and Anthropic ``sk-ant-api03-...``
+        # are ``-``-separated, so the underscore-keyed pattern missed them and
+        # an inference ``config.api_key`` echoed in a ``detail`` string leaked.
+        # Synthetic fake values (not real keys).
+        for leaky in (
+            "Invalid provider config api_key=sk-proj-NotARealKeyJustATestValue0123456789abcdef",
+            "bad anthropic key sk-ant-api03-NotARealKeyJustATestValue0123456789abcdef",
+        ):
+            out = redact(leaky)
+            assert "NotARealKeyJustATestValue0123456789abcdef" not in out
+            assert "[redacted]" in out
+
+    def test_modern_provider_key_redacted_via_structured_body(self):
+        # The same key embedded in a server ``detail`` string inside a body.
+        body = {"detail": "bad provider config api_key=sk-proj-NotARealKeyJustATestValue0123456789abcdef"}
+        out = redact(body)
+        assert "NotARealKeyJustATestValue0123456789abcdef" not in str(out)
+        assert "[redacted]" in out["detail"]
+
     def test_redacts_avala_api_key_shape(self):
         # 40-char hex matches the Avala ``secrets.token_hex(20)`` output.
         leaky = "Auth failed for key 0123456789abcdef0123456789abcdef01234567"
@@ -235,7 +255,6 @@ class TestRaiseForStatusRedacts:
 
     def test_validation_error_message_redacted(self, monkeypatch):
         import httpx
-
         from avala._http import SyncHTTPTransport
         from avala.errors import ValidationError
 
@@ -276,7 +295,6 @@ class TestRaiseForStatusRedacts:
         so callers can introspect.
         """
         import httpx
-
         from avala._http import SyncHTTPTransport
         from avala.errors import ValidationError
 
@@ -311,7 +329,6 @@ class TestRaiseForStatusRedacts:
         ``_raise_for_status`` is called synchronously inside the async
         request path, so the same defense applies."""
         import httpx
-
         from avala._async_http import AsyncHTTPTransport
         from avala.errors import ValidationError
 

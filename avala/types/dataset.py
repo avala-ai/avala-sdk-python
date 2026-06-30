@@ -24,6 +24,8 @@ class DatasetItem(BaseModel):
     uid: str
     key: Optional[str] = None
     dataset: Optional[str] = None
+    dataset_owner_name: Optional[str] = None
+    dataset_slug: Optional[str] = None
     url: Optional[str] = None
     gpu_texture_url: Optional[str] = None
     thumbnails: Optional[List[str]] = None

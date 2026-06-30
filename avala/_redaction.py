@@ -67,6 +67,12 @@ _REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     # ``secret_``, ``key_``, etc.) — the prefix-keyed variant catches
     # Stripe / Resend / Supabase shapes without false-firing on UUIDs.
     re.compile(r"\b(?:sk|pk|secret|key|token)_(?:live|test|prod)?_?[A-Za-z0-9]{16,}"),
+    # Modern hyphenated provider keys: OpenAI ``sk-proj-...`` / legacy
+    # ``sk-...`` and Anthropic ``sk-ant-api03-...``. The underscore-keyed
+    # pattern above misses these because the segments are ``-``-separated.
+    # Reported via the bug-bounty program: inference-provider ``config.api_key``
+    # secrets echoed in a ``detail`` string leaked through unredacted.
+    re.compile(r"\bsk-[A-Za-z0-9][A-Za-z0-9_\-]{20,}"),
     # Avala API key shape: 40 hex chars (per ``apikey._generate_api_key``).
     re.compile(r"\b[a-f0-9]{40}\b"),
     # Authorization: Bearer <token> headers leaked into response bodies.
