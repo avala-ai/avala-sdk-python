@@ -29,6 +29,15 @@ from avala.types.slice import Slice, SliceItem
 
 CONTRACT_PATH = Path(__file__).resolve().parent.parent.parent.parent / "contracts" / "api_contracts.json"
 
+# The contract file lives in the monorepo root (avala-ai/avala) and is NOT
+# present when this package is built standalone from the public mirror repo
+# (avala-ai/avala-sdk-python). These checks are a monorepo CI gate — skip them
+# when the contract file is absent so the mirrored package's tests pass.
+pytestmark = pytest.mark.skipif(
+    not CONTRACT_PATH.exists(),
+    reason="api_contracts.json is only present in the monorepo (contract checks run in monorepo CI).",
+)
+
 
 @pytest.fixture(scope="module")
 def contract() -> Dict[str, Any]:
