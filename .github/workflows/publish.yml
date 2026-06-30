@@ -1,0 +1,126 @@
+# =============================================================================
+# Publish `avala` (Python SDK) to PyPI
+# =============================================================================
+#
+# This file lives in the PUBLIC mirror repo (avala-ai/avala-sdk-python). It is
+# mirrored from the private monorepo (avala-ai/avala @ sdks/python) — make
+# changes there, not here.
+#
+# Auth: PyPI Trusted Publishing (OIDC). No PYPI_API_TOKEN — the
+# `id-token: write` permission lets pypa/gh-action-pypi-publish exchange a
+# short-lived OIDC token. A trusted publisher must be configured on PyPI for
+# the `avala` project pointing at:
+#   owner: avala-ai · repo: avala-sdk-python · workflow: publish.yml
+# PEP 740 provenance attestations are generated automatically.
+#
+# The build and publish stages are separate jobs on purpose: the OIDC
+# `id-token: write` permission is granted ONLY to the `publish` job, which does
+# nothing but download the already-built artifact and upload it. Dependency
+# install, tests, and the build run in `build` with no minting permission, so a
+# compromised dependency or test path cannot request the trusted-publishing
+# token. (Recommended pattern from the PyPI Trusted Publishing docs.)
+#
+# Trigger: push a tag `v<version>` to this repo (the monorepo mirror does this
+# automatically on a version bump), or run manually (dry-run by default).
+# =============================================================================
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build + check only, do not publish"
+        type: boolean
+        default: true
+
+permissions: {} # least privilege by default; each job elevates only what it needs
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Test
+        run: |
+          python -m pip install -e ".[dev,cli]"
+          pytest -v
+
+      - name: Build
+        run: python -m build
+
+      - name: Check distribution
+        run: twine check dist/*
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Minimal OIDC boundary: this job holds `id-token: write` and does NOTHING but
+  # download the built artifact and hand it to PyPI. No checkout, no test, no
+  # release action — nothing else runs while the trusted-publishing token is
+  # mintable.
+  publish:
+    needs: build
+    # On a tag push, always publish. On manual dispatch, only when dry_run=false.
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write # OIDC for PyPI Trusted Publishing + provenance
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (Trusted Publishing, OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Separate from publish so the GitHub Release action never runs with
+  # `id-token: write` in scope. Only `contents: write` here, no OIDC.
+  release:
+    needs: publish
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "avala (Python SDK) ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          body: |
+            **Package:** [`avala` on PyPI](https://pypi.org/project/avala/)
+
+            Published from this repo via PyPI Trusted Publishing (OIDC) with provenance.
