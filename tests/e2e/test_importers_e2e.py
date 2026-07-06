@@ -142,11 +142,52 @@ def test_e2e_rosbag(client, tmp_path):
 
 
 # ── cloud: an existing S3 bucket (zero-copy) ────────────────────────────────────
+def _skip_if_cloud_source_empty(uri: str) -> None:
+    """Skip (not fail) when the external S3 fixture is empty or unreachable.
+
+    This test ingests from a pre-populated ``sample-images`` bucket wired via the
+    ``E2E_CLOUD_S3_URI`` + ``E2E_AWS_*`` secrets — infrastructure outside this repo.
+    If that bucket is emptied or the creds lose access, the import legitimately
+    ingests 0 items, which is a *fixture* problem, not an SDK/server regression, and
+    shouldn't red the suite. Pre-flight the source: skip with a loud reason when it
+    has no objects (or we can't list it); when it DOES contain objects we fall
+    through and the assertion still catches a real 0-item ingest regression.
+
+    boto3 missing (shouldn't happen — it's in the ``dev`` extra) → no-op, run as before.
+    """
+    try:
+        import boto3
+    except ImportError:
+        return
+    from urllib.parse import urlparse
+
+    parsed = urlparse(uri)
+    bucket, prefix = parsed.netloc, parsed.path.lstrip("/")
+    s3 = boto3.client(
+        "s3",
+        region_name=os.environ.get("AWS_REGION"),
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    )
+    try:
+        resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=10)
+    except Exception as exc:  # NoSuchBucket / AccessDenied / network / creds
+        pytest.skip(f"cloud S3 fixture unreachable ({uri}): {exc}. Fix E2E_CLOUD_S3_URI / E2E_AWS_* creds.")
+    # Ignore "directory placeholder" keys (trailing slash, 0 bytes).
+    objects = [o for o in resp.get("Contents", []) if not o.get("Key", "").endswith("/")]
+    if not objects:
+        pytest.skip(
+            f"cloud S3 fixture is empty ({uri}). Repopulate the sample-images bucket or unset E2E_CLOUD_S3_URI."
+        )
+
+
 @pytest.mark.skipif(not os.environ.get("AVALA_E2E_S3_URI"), reason="set AVALA_E2E_S3_URI (+ AWS_* env) for cloud E2E")
 def test_e2e_cloud_s3(client):
     from avala.importers import import_cloud
 
     uri = os.environ["AVALA_E2E_S3_URI"]
+    # Fixture health check: skip (don't fail) if the source bucket is empty/unreachable.
+    _skip_if_cloud_source_empty(uri)
     data_type = os.environ.get("AVALA_E2E_S3_DATA_TYPE", "image")
     slug = _unique("cloud-s3")
     ds = import_cloud(

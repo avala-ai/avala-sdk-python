@@ -8,14 +8,8 @@ from typing import Optional
 import httpx
 
 from avala._config import _normalize_base_url
-from avala.errors import (
-    AuthenticationError,
-    AvalaError,
-    NotFoundError,
-    RateLimitError,
-    ServerError,
-    ValidationError,
-)
+from avala._redaction import redact
+from avala.errors import AuthenticationError, AvalaError, NotFoundError, RateLimitError, ServerError, ValidationError
 from avala.types.account import SignupResponse
 
 _DEFAULT_BASE_URL = "https://api.avala.ai/api/v1"
@@ -29,9 +23,24 @@ def _raise_for_status(response: httpx.Response) -> None:
     message = f"HTTP {response.status_code}"
     try:
         body = response.json()
-        message = body.get("detail", message) if isinstance(body, dict) else message
+        # AVALA-SEC-2026-0012 (CWE-200), mirroring avala/_http.py: only adopt
+        # ``body["detail"]`` as the message when it's actually a string. A
+        # structured detail (e.g. ``{"detail": {"aws_secret_access_key": ...}}``)
+        # assigned to ``message`` would leak the raw secret via ``str(exc)``.
+        if isinstance(body, dict):
+            detail = body.get("detail")
+            if isinstance(detail, str):
+                message = detail
     except Exception:
         pass
+
+    # AVALA-SEC-2026-0012 (CWE-200): the server can echo request-payload values
+    # in its error ``detail``; without redaction a secret in the signup request
+    # flows straight into the raised exception's message and ``body`` (and into
+    # caller logs / Sentry / stdout). Redact both before raising, matching the
+    # main HTTP transport in avala/_http.py.
+    message = redact(message) if isinstance(message, str) else message
+    body = redact(body)
 
     status = response.status_code
     if status == 401:
