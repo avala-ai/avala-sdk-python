@@ -5,7 +5,7 @@
 [![CI](https://github.com/avala-ai/avala-sdk-python/actions/workflows/ci.yml/badge.svg)](https://github.com/avala-ai/avala-sdk-python/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Official Python SDK for the [Avala API](https://avala.ai/docs). Build and manage ML annotation datasets, projects, exports, and tasks programmatically.
+Official Python SDK for the [Avala API](https://avala.ai/docs) — the open Physical AI Data Platform. Programmatically manage sensor datasets (MCAP, LiDAR, video), annotation projects, exports, tasks, and fleet devices.
 
 > **Note:** This repository is a read-only mirror. To report bugs or request features, please [open an issue](https://github.com/avala-ai/avala-sdk-python/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
