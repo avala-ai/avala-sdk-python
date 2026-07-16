@@ -77,8 +77,9 @@ def main(ctx: click.Context, api_key: str | None, base_url: str | None, output: 
     ctx.ensure_object(dict)
     ctx.obj["output_format"] = output
 
-    # Skip client creation for configure, completion, and shell-completion
-    if ctx.invoked_subcommand in ("configure", "shell-completion") or ctx.resilient_parsing:
+    # Skip client creation for commands that don't hit the API. ``view`` is the
+    # no-account local viewer wedge — it must work with no API key at all.
+    if ctx.invoked_subcommand in ("configure", "shell-completion", "view") or ctx.resilient_parsing:
         return
 
     try:
@@ -119,6 +120,7 @@ from avala.cli.shell_completion import shell_completion  # noqa: E402
 from avala.cli.status import status  # noqa: E402
 from avala.cli.storage_configs import storage_configs  # noqa: E402
 from avala.cli.tasks import tasks  # noqa: E402
+from avala.cli.view import view  # noqa: E402
 from avala.cli.webhooks import webhooks  # noqa: E402
 
 main.add_command(agents)
@@ -138,4 +140,5 @@ main.add_command(shell_completion)
 main.add_command(status)
 main.add_command(storage_configs)
 main.add_command(tasks)
+main.add_command(view)
 main.add_command(webhooks)
