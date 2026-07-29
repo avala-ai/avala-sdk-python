@@ -53,9 +53,12 @@ class DatasetSequence(BaseModel):
     frames: Optional[List[Dict[str, Any]]] = None
     metrics: Optional[Dict[str, Any]] = None
     dataset_uid: Optional[str] = None
+    device_id: Optional[str] = None
     allow_lidar_calibration: Optional[bool] = None
     lidar_calibration_enabled: Optional[bool] = None
     camera_calibration_enabled: Optional[bool] = None
+    # Detail-serializer only; one entry per camera in camera_calibration_data.
+    camera_calibration: Optional[List[Dict[str, Any]]] = None
     coc_timeline: Optional[List[Dict[str, Any]]] = None
 
 
