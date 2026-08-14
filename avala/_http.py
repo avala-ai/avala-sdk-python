@@ -16,10 +16,29 @@ from avala.errors import (
     AvalaError,
     ForbiddenError,
     NotFoundError,
+    QuotaExceededError,
     RateLimitError,
     ServerError,
     ValidationError,
 )
+
+
+def _quota_exceeded_error(message: str, status: int, body: Any) -> QuotaExceededError:
+    """Build a :class:`QuotaExceededError`, lifting ``limit``/``used`` off the body.
+
+    Shared by both transports so the structured fields can't drift apart. The
+    values are optional on purpose: a 413 from anywhere other than the
+    manual-upload presign endpoint (a proxy, say) carries no such body, and a
+    missing number must not turn into a wrong one.
+    """
+    limit: int | None = None
+    used: int | None = None
+    if isinstance(body, dict):
+        raw_limit = body.get("limit")
+        raw_used = body.get("used")
+        limit = raw_limit if isinstance(raw_limit, int) else None
+        used = raw_used if isinstance(raw_used, int) else None
+    return QuotaExceededError(message, status, body, limit=limit, used=used)
 
 
 class SyncHTTPTransport:
@@ -41,6 +60,20 @@ class SyncHTTPTransport:
             # regression would replay X-Avala-Api-Key on cross-host 3xx.
             follow_redirects=False,
         )
+
+    @property
+    def base_url(self) -> str:
+        """The API root this transport talks to. Used to scope upload
+        checkpoints, so state from one environment can't be replayed against
+        another."""
+        return self._config.base_url
+
+    @property
+    def api_key(self) -> str:
+        """The credential in use. Only ever consumed in hashed form (see
+        ``avala._uploads.upload_fingerprint``) to tell one account's upload
+        state from another's — never logged, never persisted."""
+        return self._config.api_key
 
     @property
     def last_rate_limit(self) -> dict[str, str | None]:
@@ -136,6 +169,16 @@ class SyncHTTPTransport:
                 body,
                 retry_after=float(retry_after) if retry_after else None,
             )
+        if status == 413:
+            # Only when the body is actually shaped like a quota refusal. A 413
+            # from a reverse proxy, or from any endpoint that simply got too
+            # large a request, means nothing about storage — and
+            # QuotaExceededError makes callers tell the user to free space or
+            # ask for a bigger cap, which is misdirection for a request-size
+            # problem. Anything unshaped falls through to the generic error.
+            quota = _quota_exceeded_error(message, status, body)
+            if quota.limit is not None or quota.used is not None:
+                raise quota
         if status in (400, 422):
             details = body if isinstance(body, list) else None
             raise ValidationError(message, status, body, details=details)

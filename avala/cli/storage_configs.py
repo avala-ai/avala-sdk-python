@@ -83,6 +83,25 @@ def get_storage_config(ctx: click.Context, uid: str) -> None:
 @click.option("--s3-bucket-region", default=None, help="S3 bucket region")
 @click.option("--s3-bucket-prefix", default=None, help="S3 bucket prefix")
 @click.option(
+    "--s3-auth-method",
+    default=None,
+    type=click.Choice(["access_key", "iam_role"]),
+    help="How Avala authenticates to the bucket. 'iam_role' is the keyless zero-copy setup.",
+)
+@click.option(
+    "--s3-role-arn",
+    default=None,
+    help="IAM role Avala assumes for --s3-auth-method=iam_role (arn:aws:iam::<acct>:role/<name>).",
+)
+@click.option(
+    "--organization",
+    default=None,
+    help=(
+        "Organization slug that will own this config. Required if you belong to more than one; "
+        "omitting it uses your sole organization. There are no personal storage configs."
+    ),
+)
+@click.option(
     "--s3-access-key-id",
     default=None,
     help="S3 access key ID (prefer AVALA_S3_ACCESS_KEY_ID env var)",
@@ -107,6 +126,9 @@ def create_storage_config(
     s3_bucket_name: str | None,
     s3_bucket_region: str | None,
     s3_bucket_prefix: str | None,
+    s3_auth_method: str | None,
+    s3_role_arn: str | None,
+    organization: str | None,
     s3_access_key_id: str | None,
     s3_secret_access_key: str | None,
     gc_bucket_name: str | None,
@@ -155,12 +177,56 @@ def create_storage_config(
     if gc_auth_json is None:
         gc_auth_json = os.environ.get("AVALA_GC_AUTH_JSON") or None
 
+    # Never submit a credential the selected config cannot use. The env
+    # fallbacks above are unconditional, so an operator with AVALA_S3_* or
+    # AVALA_GC_AUTH_JSON exported — likely, if they have ever configured either
+    # — would send them regardless of what this config is for. The server
+    # validates only the selected provider's branch, but
+    # `StorageConfigCreateSerializer` persists every submitted model field, so
+    # the config quietly stores secrets it never uses and nobody rotates.
+    #
+    # Two independent cases, and fixing only the first left a private key
+    # behind: a GCS service-account JSON riding along on a keyless S3 config.
+    dropped: list[str] = []
+    if provider != "gc_storage" and gc_auth_json:
+        dropped.append("GCS service-account JSON")
+        gc_auth_json = None
+    # A role ARN is only meaningful for an AWS iam_role config. The serializer
+    # validates just the selected branch but persists every submitted field, so
+    # an ARN sent alongside a GCS or access-key config is stored indefinitely —
+    # an unrelated IAM identity nobody will audit. Same rule as the credentials
+    # below; fixing only those left this newly exposed field behind.
+    if s3_role_arn and not (provider == "aws_s3" and s3_auth_method == "iam_role"):
+        dropped.append("S3 role ARN")
+        s3_role_arn = None
+    s3_keys_unusable = provider != "aws_s3" or s3_auth_method == "iam_role"
+    if s3_keys_unusable and (s3_access_key_id or s3_secret_access_key):
+        dropped.append("S3 access-key credentials")
+        s3_access_key_id = None
+        s3_secret_access_key = None
+    if dropped:
+        click.echo(
+            click.style(
+                f"Ignoring {' and '.join(dropped)}: this config does not use them, "
+                "and submitting them would persist secrets it never reads.",
+                fg="yellow",
+            ),
+            err=True,
+        )
+
+    # The resource has supported these since it was written; only the CLI never
+    # surfaced them, which made the keyless (iam_role) setup unreachable from
+    # the command line — including from the onboarding runbook, whose Step 2
+    # documented flags that Click rejected before any request was made.
     sc = client.storage_configs.create(
         name=name,
         provider=provider,
+        organization=organization,
         s3_bucket_name=s3_bucket_name,
         s3_bucket_region=s3_bucket_region,
         s3_bucket_prefix=s3_bucket_prefix,
+        s3_auth_method=s3_auth_method,
+        s3_role_arn=s3_role_arn,
         s3_access_key_id=s3_access_key_id,
         s3_secret_access_key=s3_secret_access_key,
         gc_storage_bucket_name=gc_bucket_name,

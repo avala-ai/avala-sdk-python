@@ -18,6 +18,7 @@ from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
 from avala.types.export import Export
 from avala.types.fleet import Alert, AlertChannel, Device, FleetEvent, Recording, Rule
 from avala.types.inference_provider import InferenceProvider
+from avala.types.manual_upload import AllowedMimes, UploadQuota
 from avala.types.organization import Invitation, Organization, OrganizationMember, Team, TeamMember
 from avala.types.project import Project
 from avala.types.quality_target import QualityTarget, QualityTargetEvaluation
@@ -53,6 +54,8 @@ __all__ = [
     "Export",
     "FleetEvent",
     "InferenceProvider",
+    "AllowedMimes",
+    "UploadQuota",
     "Invitation",
     "Organization",
     "OrganizationMember",

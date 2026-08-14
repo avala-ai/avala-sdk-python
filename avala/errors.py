@@ -55,5 +55,33 @@ class ValidationError(AvalaError):
         self.details = details or []
 
 
+class QuotaExceededError(AvalaError):
+    """Raised on 413 responses from the manual-upload presign endpoint.
+
+    The server rejects a presign whose ``content_length`` would push the owner
+    (user or organization) past their storage cap, and reports both numbers.
+    They are surfaced here because the generic ``AvalaError`` path loses them:
+    callers need ``limit``/``used`` to tell "delete something" from "ask for a
+    bigger cap". Both are bytes, and either may be ``None`` if the server
+    response did not carry the structured body.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 413,
+        body: Any = None,
+        limit: int | None = None,
+        used: int | None = None,
+    ) -> None:
+        super().__init__(message, status_code, body)
+        self.limit = limit
+        self.used = used
+
+
+class UploadStateError(AvalaError):
+    """Raised when persisted resume state exists but cannot be trusted."""
+
+
 class ServerError(AvalaError):
     """Raised on 5xx responses."""

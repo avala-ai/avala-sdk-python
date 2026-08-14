@@ -8,7 +8,7 @@ import httpx
 from pydantic import BaseModel
 
 from avala._config import ClientConfig
-from avala._http import _extract_cursor, _validate_path
+from avala._http import _extract_cursor, _quota_exceeded_error, _validate_path
 from avala._pagination import CursorPage
 from avala._redaction import redact
 from avala.errors import (
@@ -133,6 +133,16 @@ class AsyncHTTPTransport:
                 body,
                 retry_after=float(retry_after) if retry_after else None,
             )
+        if status == 413:
+            # Only when the body is actually shaped like a quota refusal. A 413
+            # from a reverse proxy, or from any endpoint that simply got too
+            # large a request, means nothing about storage — and
+            # QuotaExceededError makes callers tell the user to free space or
+            # ask for a bigger cap, which is misdirection for a request-size
+            # problem. Anything unshaped falls through to the generic error.
+            quota = _quota_exceeded_error(message, status, body)
+            if quota.limit is not None or quota.used is not None:
+                raise quota
         if status in (400, 422):
             details = body if isinstance(body, list) else None
             raise ValidationError(message, status, body, details=details)

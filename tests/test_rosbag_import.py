@@ -26,7 +26,9 @@ from rosbags.typesys import Stores, get_typestore  # noqa: E402
 BASE_URL = "https://api.avala.ai/api/v1"
 PRESIGN_URL = f"{BASE_URL}/datasets/manual-upload/file-upload-url/"
 FINALIZE_URL = f"{BASE_URL}/datasets/manual-upload/"
-S3_URL = "https://s3.example.com/upload"
+# Must be a real S3 host: the uploader refuses to POST file bytes to anything
+# outside the presigned-URL allow-list (``avala/_uploads.py``).
+S3_URL = "https://s3.us-east-1.amazonaws.com/upload"
 
 
 def _jpeg_bytes(color=(10, 20, 30)) -> bytes:

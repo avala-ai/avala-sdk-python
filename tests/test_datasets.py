@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 import respx
 from avala import Client
+from avala.errors import QuotaExceededError
 
 BASE_URL = "https://api.avala.ai/api/v1"
 
@@ -347,7 +349,136 @@ def test_create_from_manual_upload():
     assert body["license"] == 20
     assert "provider_config" not in body
     assert "is_sequence" not in body
+    # Absent unless asked for, so a personal upload keeps its existing payload.
+    assert "organization_uid" not in body
     client.close()
+
+
+@respx.mock
+def test_manual_upload_is_org_scoped_on_both_calls():
+    """The presign and the create call must carry the SAME organization_uid.
+
+    The server derives the S3 key prefix from org context on both. Presign
+    under the user and create under the org (or vice versa) and the dataset's
+    provider_config points at a prefix with no objects in it — the upload
+    "succeeds" and the dataset lists zero items. This is the exact trap that
+    forced a bespoke upload driver for the Delovantage ingest.
+    """
+    org = "e23266f5-18c2-4bda-8bcc-cc2a84dbd52e"
+    presign = respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(200, json={"method": "POST", "url": "https://s3.example/u", "fields": {}})
+    )
+    create = respx.post(f"{BASE_URL}/datasets/manual-upload/").mock(
+        return_value=httpx.Response(
+            201,
+            json={"uid": "u", "name": "N", "slug": "n", "item_count": 0, "data_type": "mcap"},
+        )
+    )
+
+    client = Client(api_key="test-key")
+    client.datasets.create_manual_upload_url(
+        dataset_name="N",
+        file_path_in_dataset="a.mcap",
+        content_length=1,
+        organization_uid=org,
+    )
+    client.datasets.create_from_manual_upload(
+        name="N",
+        slug="n",
+        data_type="mcap",
+        organization_uid=org,
+    )
+    client.close()
+
+    assert json.loads(presign.calls[0].request.content)["organization_uid"] == org
+    assert json.loads(create.calls[0].request.content)["organization_uid"] == org
+
+
+@respx.mock
+def test_manual_upload_quota():
+    """Datasets.manual_upload_quota() reads the owner's storage meter."""
+    route = respx.get(f"{BASE_URL}/datasets/manual-upload/quota/").mock(
+        return_value=httpx.Response(200, json={"used": 40 * 1024**3, "limit": 100 * 1024**3})
+    )
+    client = Client(api_key="test-key")
+    quota = client.datasets.manual_upload_quota(organization_uid="org-uid")
+    client.close()
+
+    assert quota.used == 40 * 1024**3
+    assert quota.remaining == 60 * 1024**3
+    assert route.calls[0].request.url.params["organization_uid"] == "org-uid"
+
+
+def test_upload_quota_remaining_never_negative():
+    """A reconcile can land ``used`` above ``limit`` — the cap is enforced at
+    presign, not applied retroactively. ``remaining`` must not go negative and
+    imply headroom that doesn't exist."""
+    from avala.types.manual_upload import UploadQuota
+
+    assert UploadQuota(used=120, limit=100).remaining == 0
+
+
+@respx.mock
+def test_presign_quota_rejection_raises_quota_exceeded(tmp_path):
+    """A 413 from presign carries the numbers the caller needs to act on."""
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(413, json={"detail": "Storage quota exceeded", "limit": 100, "used": 99})
+    )
+
+    client = Client(api_key="test-key")
+    with pytest.raises(QuotaExceededError) as excinfo:
+        client.datasets.upload_files(dataset_name="X", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert excinfo.value.limit == 100
+    assert excinfo.value.used == 99
+
+
+@respx.mock
+def test_create_from_local_preflights_quota(tmp_path):
+    """An upload that cannot possibly fit is refused before any bytes move."""
+    (tmp_path / "a.mcap").write_bytes(b"x" * 4096)
+    quota = respx.get(f"{BASE_URL}/datasets/manual-upload/quota/").mock(
+        return_value=httpx.Response(200, json={"used": 90, "limit": 100})
+    )
+    presign = respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(200, json={"url": "https://s3.us-east-1.amazonaws.com/u", "fields": {}})
+    )
+
+    client = Client(api_key="test-key")
+    with pytest.raises(QuotaExceededError):
+        client.datasets.create_from_local(source=str(tmp_path), name="N", slug="n", data_type="mcap")
+    client.close()
+
+    assert quota.called
+    assert not presign.called  # nothing was uploaded
+
+
+@respx.mock
+def test_create_from_local_proceeds_when_quota_is_unreadable(tmp_path):
+    """The meter needs the ``datasets.read`` scope. A write-only key legitimately
+    lacks it, and that must not block an upload the server would accept — the
+    presign's 413 stays the authority."""
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    respx.get(f"{BASE_URL}/datasets/manual-upload/quota/").mock(
+        return_value=httpx.Response(403, json={"detail": "missing scope datasets.read"})
+    )
+    respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(200, json={"url": "https://s3.us-east-1.amazonaws.com/u", "fields": {}})
+    )
+    respx.post("https://s3.us-east-1.amazonaws.com/u").mock(return_value=httpx.Response(204))
+    respx.post(f"{BASE_URL}/datasets/manual-upload/").mock(
+        return_value=httpx.Response(
+            201, json={"uid": "u", "name": "N", "slug": "n", "item_count": 1, "data_type": "mcap"}
+        )
+    )
+
+    client = Client(api_key="test-key")
+    dataset = client.datasets.create_from_local(source=str(tmp_path), name="N", slug="n", data_type="mcap")
+    client.close()
+
+    assert dataset.uid == "u"
 
 
 @respx.mock

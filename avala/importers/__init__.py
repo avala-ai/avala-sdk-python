@@ -138,12 +138,18 @@ def import_folder(
     on_progress: "Optional[Callable[[str, int], None]]" = None,
     wait: bool = False,
     wait_timeout: float = 3600.0,
+    organization_uid: Optional[str] = None,
+    resume: bool = True,
 ) -> "Dataset":
     """Create a Mission Control dataset from a local file or directory.
 
     The universal importer: uploads any local media (images / video / LiDAR / MCAP /
     splat) and creates the dataset. ``data_type`` is inferred from file extensions
     when omitted.
+
+    Pass ``organization_uid`` to create the dataset under an organization instead
+    of the calling user. Uploads resume from ``~/.avala/uploads/`` by default, so
+    a re-run after an interrupted transfer picks up where it stopped.
     """
     from avala.resources.datasets import gather_local_files
 
@@ -165,6 +171,8 @@ def import_folder(
         on_progress=on_progress,
         wait=wait,
         wait_timeout=wait_timeout,
+        organization_uid=organization_uid,
+        resume=resume,
     )
 
 

@@ -30,7 +30,17 @@ def list_importers() -> None:
     help="Override the auto-detected data type",
 )
 @click.option("--owner", default=None, help="Dataset owner username or email")
+@click.option(
+    "--organization-uid",
+    default=None,
+    help="Create the dataset under this organization instead of the calling user",
+)
 @click.option("--workers", type=int, default=8, help="Parallel upload threads (default: 8)")
+@click.option(
+    "--resume/--no-resume",
+    default=True,
+    help="Skip files a previous interrupted run already uploaded (default: resume)",
+)
 @click.option("--wait/--no-wait", "wait_after", default=False, help="Wait for indexing to finish")
 @click.pass_context
 def import_folder_cmd(
@@ -40,7 +50,9 @@ def import_folder_cmd(
     slug: str,
     data_type: str | None,
     owner: str | None,
+    organization_uid: str | None,
     workers: int,
+    resume: bool,
     wait_after: bool,
 ) -> None:
     """Create a dataset from a local file or directory (auto-detects data type)."""
@@ -54,7 +66,9 @@ def import_folder_cmd(
         slug=slug,
         data_type=data_type,
         owner_name=owner,
+        organization_uid=organization_uid,
         workers=workers,
+        resume=resume,
         wait=wait_after,
     )
     click.echo(
@@ -167,7 +181,7 @@ def import_rosbag_cmd(
 
 
 @import_group.command("cloud")
-@click.argument("uri")
+@click.argument("uri", required=False)
 @click.option("--name", required=True, help="Dataset name")
 @click.option("--slug", required=True, help="Dataset slug")
 @click.option(
@@ -175,6 +189,15 @@ def import_rosbag_cmd(
     required=True,
     type=click.Choice(["image", "video", "lidar", "mcap", "splat"]),
     help="Data type the server should index from the bucket",
+)
+@click.option(
+    "--storage-config",
+    "storage_config_uid",
+    default=None,
+    help=(
+        "Reuse a saved storage config for bucket/region/prefix "
+        "(credentials still required — the server never returns them)"
+    ),
 )
 @click.option("--region", default=None, envvar="AWS_REGION", help="S3 bucket region (or set AWS_REGION)")
 @click.option(
@@ -204,10 +227,11 @@ def import_rosbag_cmd(
 @click.pass_context
 def import_cloud_cmd(
     ctx: click.Context,
-    uri: str,
+    uri: str | None,
     name: str,
     slug: str,
     data_type: str,
+    storage_config_uid: str | None,
     region: str | None,
     access_key_id: str | None,
     secret_access_key: str | None,
@@ -226,6 +250,10 @@ def import_cloud_cmd(
     URI is s3://bucket/prefix or gs://bucket/prefix. Provide S3 credentials
     (--access-key-id/--secret-access-key or env) or a keyless --role-arn, or a
     --gcs-auth-json for GCS. Keyless --role-arn requires --organization-uid.
+
+    With --storage-config, the bucket, region and prefix come from a saved,
+    verified config and URI becomes optional (pass one to select a narrower
+    prefix inside the same bucket). Credentials are still needed separately.
     """
     from avala.importers import import_cloud
 
@@ -236,6 +264,7 @@ def import_cloud_cmd(
         name=name,
         slug=slug,
         data_type=data_type,
+        storage_config_uid=storage_config_uid,
         region=region,
         access_key_id=access_key_id,
         secret_access_key=secret_access_key,

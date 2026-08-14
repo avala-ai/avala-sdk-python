@@ -80,8 +80,18 @@ class StorageConfigs(BaseSyncResource):
         data = self._transport.request("POST", f"/storage-configs/{uid}/test/")
         return data  # type: ignore[no-any-return]
 
-    def get(self, uid: str) -> StorageConfig:
-        data = self._transport.request("GET", f"/storage-configs/{uid}/")
+    def get(self, uid: str, *, organization: str | None = None) -> StorageConfig:
+        """Fetch one storage config.
+
+        Pass ``organization`` (a slug) to scope the lookup to that org. This is
+        the difference between "a config I can see" and "a config that belongs
+        where I'm about to use it": the response carries no owner, so a caller in
+        orgs A and B could otherwise fetch A's config and register a B-owned
+        dataset over A's bucket. The server filters by membership *and* by this
+        slug, so a mismatch 404s instead of silently crossing tenants.
+        """
+        params = {"organization": organization} if organization else None
+        data = self._transport.request("GET", f"/storage-configs/{uid}/", params=params)
         return StorageConfig.model_validate(data)
 
     def delete(self, uid: str) -> None:
@@ -159,8 +169,17 @@ class AsyncStorageConfigs(BaseAsyncResource):
         data = await self._transport.request("POST", f"/storage-configs/{uid}/test/")
         return data  # type: ignore[no-any-return]
 
-    async def get(self, uid: str) -> StorageConfig:
-        data = await self._transport.request("GET", f"/storage-configs/{uid}/")
+    async def get(self, uid: str, *, organization: str | None = None) -> StorageConfig:
+        """Async mirror of :meth:`StorageConfigs.get`, including ``organization``.
+
+        The scoping parameter is a tenant boundary, not a convenience: without
+        it an async caller in orgs A and B can only fetch "a config I can see"
+        and has no way to assert it belongs where the dataset is going. Leaving
+        the mirror unscoped would have made the safe lookup unavailable on this
+        client rather than merely less ergonomic.
+        """
+        params = {"organization": organization} if organization else None
+        data = await self._transport.request("GET", f"/storage-configs/{uid}/", params=params)
         return StorageConfig.model_validate(data)
 
     async def delete(self, uid: str) -> None:

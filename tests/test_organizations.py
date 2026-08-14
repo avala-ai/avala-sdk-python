@@ -217,3 +217,81 @@ def test_transfer_ownership_path_no_members_segment():
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["new_owner_uid"] == "user-uid-001"
     client.close()
+
+
+@respx.mock
+def test_slug_for_uid_follows_page_number_pagination():
+    """`OrganizationViewSet` uses `CorePageNumberPagination`, so its `next` link
+    is `?page=N`. Feeding that back as `?cursor=N` is silently ignored by a
+    page-number endpoint — it returns page 1 again — so the walk spun to its
+    iteration cap and then reported an existing membership as missing.
+    """
+    seen: list[str | None] = []
+
+    def _pages(request):
+        page = request.url.params.get("page")
+        seen.append(page)
+        if page in (None, "1"):
+            return httpx.Response(
+                200,
+                json={
+                    "results": [{"uid": "org-early", "name": "Early", "slug": "early"}],
+                    "next": f"{BASE_URL}/organizations/?page=2",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"uid": "11111111-1111-1111-1111-111111111111", "name": "Late", "slug": "late"}],
+                "next": None,
+            },
+        )
+
+    respx.get(f"{BASE_URL}/organizations/").mock(side_effect=_pages)
+
+    client = Client(api_key="test-key")
+    slug = client.organizations.slug_for_uid("11111111-1111-1111-1111-111111111111")
+    client.close()
+
+    assert slug == "late"
+    assert seen == [None, "2"]  # advanced, rather than re-reading page 1
+
+
+@respx.mock
+def test_slug_for_uid_accepts_non_canonical_uuid_spellings():
+    """The server accepts any valid UUID spelling and returns the canonical
+    lowercase form, so comparing raw strings reported a valid uid as
+    non-membership and aborted the import before fetching anything."""
+    respx.get(f"{BASE_URL}/organizations/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [{"uid": "11111111-1111-1111-1111-111111111111", "name": "O", "slug": "o"}],
+                "next": None,
+            },
+        )
+    )
+
+    client = Client(api_key="test-key")
+    assert client.organizations.slug_for_uid("11111111-1111-1111-1111-111111111111") == "o"
+    assert client.organizations.slug_for_uid("11111111111111111111111111111111") == "o"
+    assert client.organizations.slug_for_uid("{11111111-1111-1111-1111-111111111111}") == "o"
+    assert client.organizations.slug_for_uid("11111111-1111-1111-1111-111111111111".upper()) == "o"
+    client.close()
+
+
+@respx.mock
+def test_slug_for_uid_propagates_request_failures():
+    """None must mean "walked the listing, not a member" and nothing else — its
+    caller turns None into a membership error, so a 500 reported itself as a
+    permissions problem."""
+    import pytest
+
+    from avala.errors import ServerError
+
+    respx.get(f"{BASE_URL}/organizations/").mock(return_value=httpx.Response(500, json={"detail": "boom"}))
+
+    client = Client(api_key="test-key")
+    with pytest.raises(ServerError):
+        client.organizations.slug_for_uid("11111111-1111-1111-1111-111111111111")
+    client.close()

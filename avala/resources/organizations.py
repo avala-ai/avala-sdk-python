@@ -8,21 +8,95 @@ from avala._pagination import CursorPage
 from avala.resources._base import BaseAsyncResource, BaseSyncResource
 from avala.types.organization import Invitation, Organization, OrganizationMember, Team, TeamMember
 
+# Upper bound on pages walked by uid->slug lookups. Generous versus any
+# real membership count, but finite so a malformed pagination chain
+# cannot spin.
+_MAX_LOOKUP_PAGES = 50
+
+
+def _canonical_uuid(value: str) -> str:
+    """Canonical lowercase-hyphenated form of ``value``, or it unchanged.
+
+    Returned as-is when it does not parse, so a non-UUID identifier still
+    compares equal to itself rather than being silently mangled.
+    """
+    import uuid as _uuid
+
+    try:
+        return str(_uuid.UUID(str(value)))
+    except (ValueError, AttributeError, TypeError):
+        return str(value)
+
 
 class Organizations(BaseSyncResource):
     # ── Core CRUD ────────────────────────────────────────────
 
-    def list(self, *, limit: int | None = None, cursor: str | None = None) -> CursorPage[Organization]:
+    def list(
+        self, *, limit: int | None = None, cursor: str | None = None, page: int | str | None = None
+    ) -> CursorPage[Organization]:
+        """List organizations the caller belongs to.
+
+        ``OrganizationViewSet`` uses ``CorePageNumberPagination``, so its
+        ``next`` link carries ``?page=N`` — pass that back as ``page``, not
+        ``cursor``. A page-number endpoint silently ignores ``?cursor=``, so
+        sending it there returns page 1 again rather than erroring, which turns
+        a paging loop into a spin. ``cursor`` is retained for callers that pass
+        one deliberately.
+        """
         params: dict[str, Any] = {}
         if limit is not None:
             params["limit"] = limit
         if cursor is not None:
             params["cursor"] = cursor
+        if page is not None:
+            params["page"] = page
         return self._transport.request_page("/organizations/", Organization, params=params or None)
 
     def get(self, slug: str) -> Organization:
         data = self._transport.request("GET", f"/organizations/{slug}/")
         return Organization.model_validate(data)
+
+    def slug_for_uid(self, organization_uid: str) -> str | None:
+        """Current slug of an organization the caller belongs to, or None.
+
+        Uids are stable and slugs are not, but the server addresses
+        organizations by slug in several places (S3 prefixes, storage-config
+        scoping), so callers holding a uid need the current translation. Walks
+        pages rather than reading only the first: the list endpoint pages at 20
+        and a caller in more orgs than that would otherwise get a silent None.
+
+        ``None`` means one specific thing: the listing was walked successfully
+        and this uid was not in it — i.e. the caller is not a member. Request
+        failures **propagate**.
+
+        This used to swallow every exception and return None, from when the only
+        caller treated the result as advisory. Its caller now treats None as
+        proof of non-membership and aborts the import with a membership error,
+        so a 401, a 429 or a 5xx reported itself as "you are not a member of
+        this organization" — pointing the user at permissions while the real
+        problem was transient and retryable.
+        """
+        # Compare canonical UUIDs, not raw strings. The server accepts and
+        # normalizes any valid spelling — uppercase, brace-wrapped, unhyphenated
+        # — but returns the canonical lowercase form, so a raw `==` reports a
+        # perfectly valid uid as non-membership and aborts the import before it
+        # ever fetches the config.
+        wanted = _canonical_uuid(organization_uid)
+
+        next_page: str | None = None
+        for _ in range(_MAX_LOOKUP_PAGES):
+            # `page=`, not `cursor=` — this endpoint is page-number paginated
+            # (see `list`). Feeding its `?page=N` back as `?cursor=N` is ignored
+            # server-side, so the loop re-read page 1 until the cap and then
+            # reported an existing membership as missing.
+            result = self.list(page=next_page) if next_page else self.list()
+            for org in result.items:
+                if _canonical_uuid(org.uid) == wanted:
+                    return org.slug
+            next_page = result.next_cursor
+            if not next_page:
+                return None
+        return None
 
     def create(
         self,

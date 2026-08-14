@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "avala"
-version = "0.8.3"
+version = "0.9.0"
 description = "Official Python SDK for the Avala API"
 readme = "README.md"
 license = "MIT"
@@ -53,6 +53,13 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
+# Ruff 0.16 expanded its implicit defaults from the historical Pyflakes +
+# pycodestyle correctness set to hundreds of additional rules. Keep this SDK's
+# established CI contract explicit so dependency resolution cannot change the
+# lint baseline underneath an unrelated PR.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 strict = true

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import mimetypes
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import click
+
 from avala.cli._output import human_bytes, print_detail, print_table
 
 if TYPE_CHECKING:
@@ -402,6 +402,11 @@ def wait_dataset(
 )
 @click.option("--owner", default=None, help="Dataset owner username or email")
 @click.option(
+    "--organization-uid",
+    default=None,
+    help="Create the dataset under this organization instead of the calling user",
+)
+@click.option(
     "--visibility",
     default="private",
     type=click.Choice(["private", "public"]),
@@ -420,6 +425,11 @@ def wait_dataset(
     type=int,
     default=8,
     help="Number of parallel upload threads (default: 8)",
+)
+@click.option(
+    "--resume/--no-resume",
+    default=True,
+    help="Skip files a previous interrupted run already uploaded (default: resume)",
 )
 @click.option(
     "--dry-run",
@@ -450,22 +460,23 @@ def upload_dataset(
     slug: str,
     data_type: str,
     owner: str | None,
+    organization_uid: str | None,
     visibility: str,
     industry: int | None,
     license_id: int | None,
     create_metadata: bool,
     aws_profile: str | None,
     workers: int,
+    resume: bool,
     dry_run: bool,
     wait_after: bool,
     wait_timeout: float,
 ) -> None:
     """Upload local files to Avala-managed dataset storage and create a dataset."""
     import os
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    from pathlib import Path
 
-    import httpx
+    from avala.errors import QuotaExceededError
+    from avala.resources.datasets import _STATE_DIR, clear_completed, gather_local_files
 
     try:
         from tqdm import tqdm
@@ -483,27 +494,14 @@ def upload_dataset(
     if visibility != "private":
         raise click.ClickException("Local upload currently supports private datasets only.")
 
-    source_path = Path(source).resolve()
-    local_files: list[tuple[Path, str]] = []
-    if source_path.is_file():
-        local_files.append((source_path, source_path.name))
-    else:
-        for root, _, files in os.walk(source_path):
-            for fname in sorted(files):
-                local_path = Path(root) / fname
-                relative = local_path.relative_to(source_path).as_posix()
-                local_files.append((local_path, relative))
-
+    # Same walk the resource layer uses, so --dry-run lists exactly what the
+    # upload will send.
+    local_files = gather_local_files(source)
     if not local_files:
         raise click.ClickException(f"No files found in {source}")
 
     total_files = len(local_files)
-    total_bytes = sum(path.stat().st_size for path, _ in local_files)
-    # No client-side quota precheck. The server is the source of truth for
-    # the per-user cap (LOCAL_UPLOAD_PER_USER_BYTES, configurable per
-    # deployment) and returns 413 when a presign would exceed it. A hard
-    # client cap created drift for users with raised limits and shadowed
-    # the authoritative server response. Codex review of PR #11356.
+    total_bytes = sum(os.path.getsize(path) for path, _ in local_files)
 
     click.echo("Target: Avala-managed dataset upload storage", err=True)
     click.echo(f"Found {total_files} files ({human_bytes(total_bytes)})", err=True)
@@ -511,7 +509,7 @@ def upload_dataset(
     if dry_run:
         click.echo("\n[DRY RUN] Would upload:", err=True)
         for local_path, relative in local_files[:20]:
-            click.echo(f"  {relative} ({human_bytes(local_path.stat().st_size)})", err=True)
+            click.echo(f"  {relative} ({human_bytes(os.path.getsize(local_path))})", err=True)
         if total_files > 20:
             click.echo(f"  ... and {total_files - 20} more files", err=True)
         click.echo(f"\nTotal: {total_files} files ({human_bytes(total_bytes)})", err=True)
@@ -521,120 +519,88 @@ def upload_dataset(
         )
         return
 
-    failed_count = 0
-    skipped_count = 0
-    uploaded_bytes = 0
-    start_time = time.monotonic()
-
-    # Shared stop flag — workers check this BEFORE issuing a presign so an
-    # in-flight worker that hasn't started its presign yet exits cleanly
-    # instead of burning a quota reservation. Codex review of PR #11356
-    # round 4 flagged that submitting every file up front and cancelling
-    # only not-yet-started futures still let already-running workers issue
-    # presigns and S3 PUTs after the first failure.
-    import threading
-    from concurrent.futures import CancelledError
-
-    stop_event = threading.Event()
-
-    class _Skipped(Exception):
-        """Sentinel: worker exited because stop_event was set, not a failure."""
-
-    def _upload_one(item: tuple[Path, str]) -> tuple[str, int]:
-        if stop_event.is_set():
-            raise _Skipped()
-        local_path, relative = item
-        file_size = local_path.stat().st_size
-        if stop_event.is_set():
-            raise _Skipped()
-        upload_info = client.datasets.create_manual_upload_url(
-            dataset_name=name,
-            file_path_in_dataset=relative,
-            content_length=file_size,
-        )
-        if stop_event.is_set():
-            raise _Skipped()
-        fields = upload_info["fields"]
-        content_type = (
-            fields.get("Content-Type") or mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
-        )
-        with local_path.open("rb") as fh:
-            response = httpx.post(
-                upload_info["url"],
-                data=fields,
-                files={"file": (local_path.name, fh, content_type)},
-                timeout=None,
-            )
-            response.raise_for_status()
-        return (relative, file_size)
-
+    # The upload loop lives in ``client.datasets.upload_files`` — retries,
+    # resume state, and the presigned-host allow-list included. This command
+    # used to reimplement it inline, which meant every fix had to be made
+    # twice and the CLI silently lacked the resilience the resource grew.
+    #
+    # Still no client-side quota precheck here: the server is the source of
+    # truth for the cap and returns 413 when a presign would exceed it, which
+    # surfaces as QuotaExceededError below. A hard client cap created drift for
+    # users with raised limits. Codex review of PR #11356.
     progress = tqdm(total=total_files, unit="file", desc="Uploading", disable=tqdm is None) if tqdm else None
+    resumed_files = 0
 
-    # Bounded active set — submit only ``workers`` files at a time, and only
-    # submit the next file after a prior one completes. Combined with the
-    # ``stop_event`` flag, this guarantees no new presigns are issued after
-    # the first failure (the previous all-up-front submission left
-    # already-running workers issuing presigns and PUTs even after we
-    # cancelled the not-started futures).
-    first_error: Optional[Exception] = None
-    iterator = iter(local_files)
-    active: dict = {}
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        # Prime the executor with up to ``workers`` futures.
-        for _ in range(max(1, workers)):
-            try:
-                item = next(iterator)
-            except StopIteration:
-                break
-            active[pool.submit(_upload_one, item)] = item
+    def _on_progress(_relative: str, _size: int) -> None:
+        if progress:
+            progress.update(1)
 
-        while active:
-            done_future = next(as_completed(active))
-            done_item = active.pop(done_future)
-            try:
-                _, nbytes = done_future.result()
-                uploaded_bytes += nbytes
-                # Advance: submit the next pending file iff we're not stopping.
-                if first_error is None and not stop_event.is_set():
-                    try:
-                        nxt = next(iterator)
-                        active[pool.submit(_upload_one, nxt)] = nxt
-                    except StopIteration:
-                        pass
-            except CancelledError:
-                skipped_count += 1
-            except _Skipped:
-                skipped_count += 1
-            except Exception as exc:
-                failed_count += 1
-                click.echo(f"  FAILED: {done_item[1]} - {exc}", err=True)
-                if first_error is None:
-                    first_error = exc
-                    stop_event.set()
-                    # Cancel anything not started; running workers exit on
-                    # the next ``stop_event.is_set()`` check.
-                    for pending in list(active):
-                        pending.cancel()
-            if progress:
-                progress.update(1)
+    def _on_skipped(_relative: str) -> None:
+        # Files a previous run already uploaded still count toward `total_files`,
+        # so without this the bar closes at (say) 1/100 on a successful resume
+        # and reads as a near-total failure of an upload that is in fact done.
+        nonlocal resumed_files
+        resumed_files += 1
+        if progress:
+            progress.update(1)
 
-    if progress:
-        progress.close()
+    # Captured before the first byte moves; verified again before the create
+    # call below. `create_from_local` does this internally, but this command
+    # finalizes for itself — and a guard on only one of the two paths is how the
+    # rename-mid-upload hole survived its first fix.
+    storage_root_before = client.datasets.resolve_storage_root(organization_uid)
+
+    start_time = time.monotonic()
+    try:
+        uploaded_bytes = client.datasets.upload_files(
+            dataset_name=name,
+            files=local_files,
+            workers=workers,
+            on_progress=_on_progress,
+            on_skipped=_on_skipped,
+            organization_uid=organization_uid,
+            resume=resume,
+            # The dataset NAME decides the remote prefix; the slug never
+            # reaches S3. Keying on the slug meant the standard
+            # slug-collision retry re-sent the whole payload against an
+            # unchanged prefix. Matches `create_from_local`.
+            state_key=name,
+            # Keep the checkpoint until the dataset is created below, so a
+            # failure at that last step resumes instead of re-sending everything.
+            clear_state_on_success=False,
+        )
+    except QuotaExceededError as exc:
+        detail = ""
+        if exc.limit is not None and exc.used is not None:
+            detail = f" ({human_bytes(exc.used)} of {human_bytes(exc.limit)} already used)"
+        raise click.ClickException(f"Storage quota exceeded{detail}. Free space or request a higher cap.")
+    except Exception as exc:
+        # Resume state is intact — say so, because the natural next move is to
+        # re-run the identical command rather than start over.
+        click.echo(f"\nUpload failed: {exc}", err=True)
+        raise click.ClickException("Upload failed. Re-run the same command to resume from where it stopped.")
+    finally:
+        # Runs before the exception propagates, so the bar is closed exactly
+        # once on every path.
+        if progress:
+            progress.close()
 
     elapsed = time.monotonic() - start_time
     rate = uploaded_bytes / elapsed if elapsed > 0 else 0
-    uploaded_count = total_files - failed_count - skipped_count
+    # `uploaded_bytes` covers only what moved in THIS run, so attributing it to
+    # the whole manifest overstates the transfer on every resume.
+    sent_files = total_files - resumed_files
+    resumed_note = f" ({resumed_files} already uploaded)" if resumed_files else ""
     click.echo(
-        f"\nDone in {elapsed:.1f}s — uploaded {uploaded_count} files "
-        f"({human_bytes(uploaded_bytes)}, {human_bytes(rate)}/s), {failed_count} failed, "
-        f"{skipped_count} skipped after first error.",
+        f"\nDone in {elapsed:.1f}s — uploaded {human_bytes(uploaded_bytes)} "
+        f"across {sent_files} file(s) at {human_bytes(rate)}/s{resumed_note}.",
         err=True,
     )
 
-    if first_error is not None:
-        raise click.ClickException(f"Upload failed: {first_error}")
-    if failed_count > 0:
-        raise click.ClickException(f"{failed_count} file(s) failed to upload")
+    try:
+        client.datasets.assert_storage_root_unchanged(storage_root_before, organization_uid=organization_uid)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc))
 
     dataset = client.datasets.create_from_manual_upload(
         name=name,
@@ -645,6 +611,17 @@ def upload_dataset(
         owner_name=owner,
         industry=industry,
         license=license_id,
+        organization_uid=organization_uid,
+    )
+    # Dataset exists — the resume checkpoint has nothing left to protect.
+    # Must match the fingerprint `upload_files` keyed this run's state by, or
+    # the checkpoint for this destination is left behind. Call the resource's
+    # helper rather than rebuilding it: a personal upload folds in the resolved
+    # user uid, which this module has no way to know.
+    clear_completed(
+        _STATE_DIR,
+        name,
+        fingerprint=client.datasets._upload_fingerprint(organization_uid, name),
     )
     click.echo(f"Dataset created: {dataset.uid} ({dataset.name})", err=True)
 

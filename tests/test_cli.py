@@ -74,6 +74,55 @@ def test_datasets_upload_dry_run_local_file():
     assert "Would create dataset" in result.output
 
 
+@respx.mock
+def test_datasets_upload_passes_organization_uid_end_to_end():
+    """``--organization-uid`` must reach BOTH the presign and the create call.
+
+    They have to agree or the dataset is created over an empty S3 prefix (see
+    tests/test_datasets.py::test_manual_upload_is_org_scoped_on_both_calls).
+    """
+    org = "e23266f5-18c2-4bda-8bcc-cc2a84dbd52e"
+    s3 = "https://s3.us-east-1.amazonaws.com/upload"
+    presign = respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(200, json={"url": s3, "fields": {}})
+    )
+    respx.post(s3).mock(return_value=httpx.Response(204))
+    create = respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/").mock(
+        return_value=httpx.Response(
+            201,
+            json={"uid": "d1", "name": "Org DS", "slug": "org-ds", "item_count": 1, "data_type": "image"},
+        )
+    )
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("frame.jpg", "wb") as fh:
+            fh.write(b"image")
+        result = runner.invoke(
+            main,
+            [
+                "--api-key",
+                "test-key",
+                "datasets",
+                "upload",
+                "--source",
+                "frame.jpg",
+                "--name",
+                "Org DS",
+                "--slug",
+                "org-ds",
+                "--data-type",
+                "image",
+                "--organization-uid",
+                org,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(presign.calls[0].request.content)["organization_uid"] == org
+    assert json.loads(create.calls[0].request.content)["organization_uid"] == org
+
+
 def test_datasets_upload_rejects_legacy_storage_config():
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -227,6 +276,60 @@ def test_storage_configs_list():
     result = runner.invoke(main, ["--api-key", "test-key", "storage-configs", "list"])
     assert result.exit_code == 0
     assert "My S3 Bucket" in result.output
+
+
+@respx.mock
+def test_storage_configs_create_supports_the_keyless_iam_role_setup():
+    """The zero-copy onboarding runbook's blocking Step 2 uses exactly this
+    invocation. The CLI exposed neither `--s3-auth-method` nor `--s3-role-arn`,
+    so Click rejected the documented command before any request was made — the
+    keyless setup was unreachable from the command line even though the resource
+    had always supported it."""
+    route = respx.post("https://api.avala.ai/api/v1/storage-configs/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "sc-1",
+                "name": "Partner bucket",
+                "provider": "aws_s3",
+                "is_verified": True,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            },
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--api-key",
+            "test-key",
+            "storage-configs",
+            "create",
+            "--name",
+            "Partner bucket",
+            "--provider",
+            "aws_s3",
+            "--s3-bucket-name",
+            "partner-bucket",
+            "--s3-bucket-region",
+            "ap-south-1",
+            "--s3-bucket-prefix",
+            "deliveries/",
+            "--s3-auth-method",
+            "iam_role",
+            "--s3-role-arn",
+            "arn:aws:iam::123456789012:role/AvalaRead",
+            "--organization",
+            "partner-org",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(route.calls.last.request.content)
+    assert body["s3_auth_method"] == "iam_role"
+    assert body["s3_role_arn"] == "arn:aws:iam::123456789012:role/AvalaRead"
+    assert body["s3_bucket_prefix"] == "deliveries/"
 
 
 @respx.mock
@@ -752,3 +855,112 @@ def test_exports_wait_timeout():
         )
     assert result.exit_code != 0
     assert "did not complete" in result.output
+
+
+@respx.mock
+def test_datasets_upload_is_unaffected_by_a_rename():
+    """The CLI finalizes for itself rather than going through
+    `create_from_local`, so it carries its own copy of the destination guard —
+    and therefore its own copy of that guard's behaviour.
+
+    Since #13946 the destination is `__o__=/<org_uid>/`, so a rename cannot move
+    it and the upload must complete. This asserted a refusal while the prefix was
+    slug-derived; keeping that would have failed a correct upload at the last
+    step, after every byte had already landed in the right place."""
+    org = "org-1"
+    s3 = "https://s3.us-east-1.amazonaws.com/upload"
+    respx.get("https://api.avala.ai/api/v1/organizations/").mock(
+        side_effect=[
+            httpx.Response(200, json={"results": [{"uid": org, "name": "O", "slug": "before"}], "next": None}),
+            httpx.Response(200, json={"results": [{"uid": org, "name": "O", "slug": "after"}], "next": None}),
+        ]
+    )
+    respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(200, json={"url": s3, "fields": {}})
+    )
+    respx.post(s3).mock(return_value=httpx.Response(204))
+    create = respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/").mock(
+        return_value=httpx.Response(
+            201, json={"uid": "d1", "name": "N", "slug": "n", "item_count": 1, "data_type": "image"}
+        )
+    )
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("frame.jpg", "wb") as fh:
+            fh.write(b"image")
+        result = runner.invoke(
+            main,
+            [
+                "--api-key",
+                "test-key",
+                "datasets",
+                "upload",
+                "--source",
+                "frame.jpg",
+                "--name",
+                "N",
+                "--slug",
+                "n",
+                "--data-type",
+                "image",
+                "--organization-uid",
+                org,
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert create.called  # the rename is irrelevant; the dataset registers
+
+
+@respx.mock
+def test_storage_configs_create_drops_credentials_the_config_cannot_use():
+    """The env fallbacks are unconditional, so an operator with AVALA_GC_AUTH_JSON
+    exported would ship a private key on a keyless S3 config. The server
+    validates only the selected provider but persists every submitted field."""
+    route = respx.post("https://api.avala.ai/api/v1/storage-configs/").mock(
+        return_value=httpx.Response(
+            201,
+            json={
+                "uid": "sc-1",
+                "name": "Partner",
+                "provider": "aws_s3",
+                "is_verified": True,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            },
+        )
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "--api-key",
+            "test-key",
+            "storage-configs",
+            "create",
+            "--name",
+            "Partner",
+            "--provider",
+            "aws_s3",
+            "--s3-bucket-name",
+            "b",
+            "--s3-bucket-region",
+            "us-east-1",
+            "--s3-auth-method",
+            "iam_role",
+            "--s3-role-arn",
+            "arn:aws:iam::1:role/r",
+        ],
+        env={
+            "AVALA_S3_ACCESS_KEY_ID": "AKIAEXAMPLE",
+            "AVALA_S3_SECRET_ACCESS_KEY": "shhh",
+            "AVALA_GC_AUTH_JSON": '{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----"}',
+        },
+    )
+
+    assert result.exit_code == 0, result.output
+    body = json.loads(route.calls.last.request.content)
+    assert "s3_access_key_id" not in body and "s3_secret_access_key" not in body
+    assert "gc_storage_auth_json_content" not in body
+    assert "private_key" not in route.calls.last.request.content.decode()
