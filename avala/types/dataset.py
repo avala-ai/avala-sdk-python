@@ -60,6 +60,9 @@ class DatasetSequence(BaseModel):
     # Detail-serializer only; one entry per camera in camera_calibration_data.
     camera_calibration: Optional[List[Dict[str, Any]]] = None
     coc_timeline: Optional[List[Dict[str, Any]]] = None
+    is_workflow_terminal: Optional[bool] = None
+    sequence_status_workflow: Optional[Dict[str, Any]] = None
+    sequence_deliverable_workflow: Optional[Dict[str, Any]] = None
 
 
 class Vec3(BaseModel):

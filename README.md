@@ -41,6 +41,28 @@ print(finished.download_url)
 tasks = client.tasks.list(project="project-uid", status="completed")
 ```
 
+## Load Public Dataset Revisions
+
+Published Physical AI datasets with open-download rights can be loaded without an Avala account
+or API key. References resolve to immutable dataset and manifest digests; object bytes are fetched
+lazily and verified against their declared size and SHA-256.
+
+```python
+import avala
+
+with avala.load("owner/dataset") as dataset:  # defaults to the "main" revision alias
+    episode = dataset.episodes[0]
+    with episode.open() as raw_mcap:  # verified seekable spool; large objects stay off-heap
+        magic = raw_mcap.read(8)
+    print(dataset.canonical_reference, episode.sha256, episode.size_bytes, magic)
+```
+
+Pin a reproducible revision with `owner/dataset@<revision-digest>` or its returned
+`avala://datasets/<uid>@<revision-digest>` canonical reference. Async code uses
+`async with await avala.async_load(...) as dataset:`,
+`episode = await dataset.episodes[0]`, and `content = await episode.open()` (close the returned
+file after consuming it). Use `read()` only for deliberately bounded, small objects.
+
 ## Authentication
 
 The client reads your API key from the `AVALA_API_KEY` environment variable by default:

@@ -49,3 +49,15 @@ Two rules, both learned the hard way (see
 
 `tests/conftest.py` redirects the resume checkpoint dir per-test. Any new test that
 uploads must keep that isolation, or leftover state makes later runs skip files.
+
+## Public dataset resolver
+
+- Allocate the verified download spool before requesting an access grant. Signed URLs must not
+  survive in exception contexts, traceback locals, response bodies, or parser frames.
+- Resolver requests are anonymously throttled. Sync and async transports must honor bounded
+  `Retry-After` delays and retry 429 responses; collection algorithms must also avoid request-per-object scans.
+- One resolved dataset owns one manifest-evidence tracker and episode-reference cache shared by
+  `objects`, `episodes`, and every `for_role()` view. Separate views must not accept conflicting
+  identities or exceed the manifest's count/size bounds in aggregate.
+- Provider URL validation mirrors the server's grant grammar, including regional path-style S3
+  dualstack hosts. Rights metadata has an exact field set; never expose undeclared response extras.

@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from avala.types.dataset import Dataset
+from avala.types.dataset import Dataset, DatasetSequence
 from avala.types.export import Export
 from avala.types.project import Project
 from avala.types.task import Task
@@ -54,6 +54,41 @@ class TestDatasetModel:
         assert ds.uid == "uid-1"
         assert not hasattr(ds, "unknown_field")
         assert "unknown_field" not in ds.model_dump()
+
+
+class TestDatasetSequenceModel:
+    def test_workflow_fields_are_parsed_when_exposed(self) -> None:
+        sequence = DatasetSequence.model_validate(
+            {
+                "uid": "sequence-uid",
+                "is_workflow_terminal": True,
+                "sequence_status_workflow": {
+                    "workflow_revision_uid": "revision-uid",
+                    "initial_status": "labeling",
+                    "terminal_status": "complete",
+                    "statuses": [],
+                },
+                "sequence_deliverable_workflow": {
+                    "schema_version": 2,
+                    "workflow_revision_uid": "revision-uid",
+                    "is_complete": True,
+                    "deliverables": [],
+                },
+            }
+        )
+
+        assert sequence.is_workflow_terminal is True
+        assert sequence.sequence_status_workflow is not None
+        assert sequence.sequence_status_workflow["initial_status"] == "labeling"
+        assert sequence.sequence_deliverable_workflow is not None
+        assert sequence.sequence_deliverable_workflow["schema_version"] == 2
+
+    def test_workflow_fields_default_to_none_when_hidden(self) -> None:
+        sequence = DatasetSequence(uid="sequence-uid")
+
+        assert sequence.is_workflow_terminal is None
+        assert sequence.sequence_status_workflow is None
+        assert sequence.sequence_deliverable_workflow is None
 
 
 class TestProjectModel:

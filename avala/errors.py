@@ -85,3 +85,49 @@ class UploadStateError(AvalaError):
 
 class ServerError(AvalaError):
     """Raised on 5xx responses."""
+
+
+class DatasetReferenceError(ValueError):
+    """Raised when a public dataset reference is ambiguous or malformed."""
+
+
+class UnsupportedDatasetModeError(ValueError):
+    """Raised when a loader mode is not implemented by the public v1 contract."""
+
+
+class MutableDatasetAliasWarning(UserWarning):
+    """Warns that a friendly alias is mutable and unsuitable for reproducible inputs."""
+
+
+class DatasetResolverError(AvalaError):
+    """Raised when the anonymous dataset resolver cannot complete safely."""
+
+    def __init__(self, reason: str, status_code: int | None = None) -> None:
+        super().__init__(f"Dataset resolver failed ({reason}).", status_code)
+        self.reason = reason
+
+
+class DatasetRevisionWithdrawnError(DatasetResolverError):
+    """Raised when an exact immutable revision has been withdrawn."""
+
+    def __init__(self, canonical_reference: str, dataset_uid: str, revision_sha256: str) -> None:
+        super().__init__("revision_withdrawn", 410)
+        self.canonical_reference = canonical_reference
+        self.dataset_uid = dataset_uid
+        self.revision_sha256 = revision_sha256
+
+
+class DatasetIntegrityError(DatasetResolverError):
+    """Raised when resolver metadata or downloaded bytes violate their identities."""
+
+
+class DatasetDownloadError(AvalaError):
+    """URL-free failure raised by an isolated public-object download."""
+
+    def __init__(self, provider: str, object_uid: str, reason: str) -> None:
+        super().__init__(
+            f"Dataset object download failed (provider={provider}, object_uid={object_uid}, reason={reason})."
+        )
+        self.provider = provider
+        self.object_uid = object_uid
+        self.reason = reason
