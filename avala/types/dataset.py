@@ -11,6 +11,11 @@ class Dataset(BaseModel):
     name: str
     slug: str
     item_count: int = 0
+    #: The ``@<owner>`` segment of this dataset's canonical path. It is the
+    #: organization's slug for an org-owned dataset and the user's handle (or
+    #: username) for a personal one, so it CHANGES when a dataset is transferred
+    #: — which is how a caller learns the new URL from a transfer response.
+    owner_name: Optional[str] = None
     status: Optional[str] = None
     data_type: Optional[str] = None
     is_sequence: Optional[bool] = None

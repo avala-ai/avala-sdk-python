@@ -108,6 +108,51 @@ def get_dataset(ctx: click.Context, uid: str) -> None:
     )
 
 
+@datasets.command("transfer")
+@click.argument("owner")
+@click.argument("slug")
+@click.option("--organization-uid", default=None, help="UID of the destination organization")
+@click.option("--owner-username", default=None, help="Username of the destination user (yourself only)")
+@click.pass_context
+def transfer_dataset_cmd(
+    ctx: click.Context,
+    owner: str,
+    slug: str,
+    organization_uid: str | None,
+    owner_username: str | None,
+) -> None:
+    """Transfer a dataset to another organization, or to your own account.
+
+    Pass exactly one of --organization-uid or --owner-username. A dataset is
+    owned by a user XOR an organization, so the transfer sets one and clears the
+    other. Requires the OWNER role on the dataset's current organization, and
+    authority at the destination.
+
+    OWNER and SLUG identify the dataset at its CURRENT path; after a successful
+    transfer that path no longer resolves, so use the printed owner next time.
+    """
+    client = ctx.obj["client"]
+    if (organization_uid is None) == (owner_username is None):
+        raise click.UsageError("Pass exactly one of --organization-uid or --owner-username.")
+    d = client.datasets.transfer(
+        owner,
+        slug,
+        organization_uid=organization_uid,
+        owner_username=owner_username,
+    )
+    print_detail(
+        f"Transferred: {d.name}",
+        [
+            ("UID", d.uid),
+            ("Name", d.name),
+            ("Slug", d.slug),
+            ("Owner", d.owner_name or "—"),
+            ("New path", f"/@{d.owner_name}/datasets/{d.slug}" if d.owner_name else "—"),
+        ],
+        json_keys=["uid", "name", "slug", "owner_name"],
+    )
+
+
 @datasets.command("get-sequence")
 @click.argument("owner")
 @click.argument("slug")

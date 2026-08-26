@@ -201,6 +201,21 @@ def _build_calibration_from_sequence(sequence: DatasetSequence) -> DatasetCalibr
     return DatasetCalibration(sequence_uid=sequence.uid, cameras=cameras)
 
 
+def _transfer_payload(*, organization_uid: str | None, owner_username: str | None) -> dict[str, Any]:
+    """Build (and validate) a /transfer/ body.
+
+    Checked client-side as well as server-side so the common mistake — passing
+    both, or neither — is a clear ``ValueError`` at the call site rather than a
+    400 the caller has to decode. The server check is the real one; this is
+    ergonomics.
+    """
+    if (organization_uid is None) == (owner_username is None):
+        raise ValueError("Pass exactly one of organization_uid or owner_username.")
+    if organization_uid is not None:
+        return {"organization_uid": organization_uid}
+    return {"owner_username": owner_username}
+
+
 class Datasets(BaseSyncResource):
     def list(
         self,
@@ -233,6 +248,32 @@ class Datasets(BaseSyncResource):
 
     def get_by_slug(self, owner: str, slug: str) -> Dataset:
         data = self._transport.request("GET", f"/datasets/{owner}/{slug}/")
+        return Dataset.model_validate(data)
+
+    def transfer(
+        self,
+        owner: str,
+        slug: str,
+        *,
+        organization_uid: str | None = None,
+        owner_username: str | None = None,
+    ) -> Dataset:
+        """Move a dataset to a different owner.
+
+        Exactly one of ``organization_uid`` or ``owner_username`` must be given —
+        a dataset is owned by a user XOR an organization, never both.
+
+        Transferring requires the OWNER role on the dataset's current
+        organization (an ADMIN may edit a dataset but may not give it away), and
+        authority at the destination too. ``owner_username`` may only name
+        *yourself*: the API refuses handing a dataset to another account, since
+        that would park a tenant's data on a login that never agreed to take it.
+
+        Returns the dataset at its NEW path; its ``owner_name`` is what the
+        canonical ``/@<owner>/datasets/<slug>`` URL now uses.
+        """
+        payload = _transfer_payload(organization_uid=organization_uid, owner_username=owner_username)
+        data = self._transport.request("POST", f"/datasets/{owner}/{slug}/transfer/", json=payload)
         return Dataset.model_validate(data)
 
     def create(
@@ -1342,6 +1383,32 @@ class AsyncDatasets(BaseAsyncResource):
 
     async def get_by_slug(self, owner: str, slug: str) -> Dataset:
         data = await self._transport.request("GET", f"/datasets/{owner}/{slug}/")
+        return Dataset.model_validate(data)
+
+    async def transfer(
+        self,
+        owner: str,
+        slug: str,
+        *,
+        organization_uid: str | None = None,
+        owner_username: str | None = None,
+    ) -> Dataset:
+        """Move a dataset to a different owner.
+
+        Exactly one of ``organization_uid`` or ``owner_username`` must be given —
+        a dataset is owned by a user XOR an organization, never both.
+
+        Transferring requires the OWNER role on the dataset's current
+        organization (an ADMIN may edit a dataset but may not give it away), and
+        authority at the destination too. ``owner_username`` may only name
+        *yourself*: the API refuses handing a dataset to another account, since
+        that would park a tenant's data on a login that never agreed to take it.
+
+        Returns the dataset at its NEW path; its ``owner_name`` is what the
+        canonical ``/@<owner>/datasets/<slug>`` URL now uses.
+        """
+        payload = _transfer_payload(organization_uid=organization_uid, owner_username=owner_username)
+        data = await self._transport.request("POST", f"/datasets/{owner}/{slug}/transfer/", json=payload)
         return Dataset.model_validate(data)
 
     async def create(
