@@ -269,6 +269,8 @@ def health_cmd(ctx: click.Context, owner: str, slug: str) -> None:
         [
             ("Dataset UID", h.dataset_uid),
             ("Status", h.dataset_status or "—"),
+            ("Data type", h.data_type),
+            ("Sequence dataset", "yes" if h.is_sequence else "no"),
             ("Items", str(h.item_count)),
             ("Sequences", str(h.sequence_count)),
             ("Frames", str(h.total_frames)),
@@ -282,6 +284,8 @@ def health_cmd(ctx: click.Context, owner: str, slug: str) -> None:
             "dataset_uid",
             "dataset_slug",
             "dataset_status",
+            "data_type",
+            "is_sequence",
             "item_count",
             "sequence_count",
             "total_frames",

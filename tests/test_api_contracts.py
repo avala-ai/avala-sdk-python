@@ -21,7 +21,7 @@ from typing import Any, Dict, Set, cast
 import pytest
 
 from avala.types.annotation_issue import AnnotationIssue, AnnotationIssueMetrics, AnnotationIssueToolDetail
-from avala.types.dataset import DatasetItem, DatasetSequence
+from avala.types.dataset import DatasetHealth, DatasetItem, DatasetSequence
 from avala.types.organization import Invitation, Organization, OrganizationMember, Team, TeamMember
 from avala.types.slice import Slice, SliceItem
 
@@ -57,6 +57,7 @@ SDK_TYPE_MAP = {
     "SliceItem": SliceItem,
     "DatasetItem": DatasetItem,
     "DatasetSequence": DatasetSequence,
+    "DatasetHealth": DatasetHealth,
     "AnnotationIssue": AnnotationIssue,
     "AnnotationIssueMetrics": AnnotationIssueMetrics,
     "AnnotationIssueToolDetail": AnnotationIssueToolDetail,
@@ -141,6 +142,7 @@ class TestSDKTypesCoverContractFields:
             "SliceItem",
             "DatasetItem",
             "DatasetSequence",
+            "DatasetHealth",
             "AnnotationIssue",
             "AnnotationIssueMetrics",
             "AnnotationIssueToolDetail",
@@ -171,6 +173,7 @@ class TestSDKTypesCoverContractFields:
             "OrganizationMember",
             "Invitation",
             "TeamMember",
+            "DatasetHealth",
             "AnnotationIssue",
             "AnnotationIssueMetrics",
             "AnnotationIssueToolDetail",
@@ -264,6 +267,7 @@ class TestResponseShapesMatchContract:
         "endpoint_key",
         [
             "datasets.create",
+            "datasets.get_health",
             "organizations.update_team",
             "organizations.add_team_member",
         ],

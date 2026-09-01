@@ -58,6 +58,7 @@ class DatasetSequence(BaseModel):
     frames: Optional[List[Dict[str, Any]]] = None
     metrics: Optional[Dict[str, Any]] = None
     dataset_uid: Optional[str] = None
+    dataset_data_type: Optional[str] = None
     device_id: Optional[str] = None
     allow_lidar_calibration: Optional[bool] = None
     lidar_calibration_enabled: Optional[bool] = None
@@ -164,6 +165,8 @@ class DatasetHealth(BaseModel):
     dataset_uid: str
     dataset_slug: str
     dataset_status: Optional[str] = None
+    data_type: str
+    is_sequence: bool
     item_count: int = 0
     sequence_count: int = 0
     total_frames: int = 0

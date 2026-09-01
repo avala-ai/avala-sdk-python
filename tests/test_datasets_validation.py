@@ -71,6 +71,8 @@ HEALTH_PAYLOAD = {
     "dataset_uid": "44444444-4444-4444-4444-444444444444",
     "dataset_slug": "third-dimension-095940-full-scene",
     "dataset_status": "created",
+    "data_type": "lidar",
+    "is_sequence": True,
     "item_count": 569,
     "sequence_count": 1,
     "total_frames": 569,
@@ -187,6 +189,8 @@ def test_get_health_returns_typed_snapshot():
     )
     client = Client(api_key="test-key")
     health = client.datasets.get_health("thirddimension", "third-dimension-095940-full-scene")
+    assert health.data_type == "lidar"
+    assert health.is_sequence is True
     assert health.total_frames == 569
     assert health.ingest_ok is True
     assert len(health.sequences) == 1
