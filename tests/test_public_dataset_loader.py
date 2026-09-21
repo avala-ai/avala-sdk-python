@@ -31,18 +31,148 @@ from avala.errors import (
     UnsupportedDatasetModeError,
 )
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-FIXTURES = json.loads((REPOSITORY_ROOT / "contracts/dataset_resolver_v1_fixtures.json").read_text())
+FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures/dataset_resolver_v1_fixtures.json"
+FIXTURES = json.loads(FIXTURE_PATH.read_text())
 BASE_URL = "https://api.avala.ai/api/v1"
 RESOLVE_PATH = "/resolve/acme/navigation@main/"
 RESOLVE_URL = f"{BASE_URL}{RESOLVE_PATH}"
 OBJECTS_PATH = FIXTURES["resolve_response"]["body"]["manifest"]["objects_path"]
 OBJECTS_URL = f"{BASE_URL}{OBJECTS_PATH}"
 ACCESS_PATH = FIXTURES["object_page_response"]["body"]["results"][0]["access_path"]
-ACCESS_URL = f"{BASE_URL}{ACCESS_PATH}"
+ACCESS_URL = f"{BASE_URL}{ACCESS_PATH}?transport=avala-edge-v1"
 DOWNLOAD_URL = FIXTURES["access_grant_response"]["body"]["url"]
 FIXTURE_SERVER_DATE = datetime(2026, 8, 23, 18, 0, tzinfo=timezone.utc)
 MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
+
+
+def test_bundled_resolver_fixture_matches_monorepo_contract() -> None:
+    canonical = Path(__file__).resolve().parent.parent.parent.parent / "contracts/dataset_resolver_v1_fixtures.json"
+    if not canonical.exists():
+        pytest.skip("Canonical contract is monorepo-only; standalone resolver tests use the bundled fixture.")
+    assert FIXTURE_PATH.read_bytes() == canonical.read_bytes(), (
+        "Update the bundled fixture with the canonical contract."
+    )
+
+
+@pytest.mark.parametrize("checkout", ["/sdk", "/app", "/workspace/avala-sdk-python"])
+def test_fixture_parity_handles_standalone_checkout_depth(checkout: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(globals(), "__file__", str(Path(checkout) / "tests/test_public_dataset_loader.py"))
+    original_exists = Path.exists
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda path: False if path.name == "dataset_resolver_v1_fixtures.json" else original_exists(path),
+    )
+    with pytest.raises(pytest.skip.Exception, match="Canonical contract is monorepo-only"):
+        test_bundled_resolver_fixture_matches_monorepo_contract()
+
+
+@respx.mock
+def test_direct_sync_access_probe_keeps_get_without_download_intent() -> None:
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    grant_route = respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    with avala.load("acme/navigation") as dataset:
+        episode = dataset.episodes[0]
+        episode._transport.issue_access_grant(episode._revision, episode._document)
+    assert grant_route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_direct_async_access_probe_keeps_get_without_download_intent() -> None:
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    grant_route = respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    async with await avala.async_load("acme/navigation") as dataset:
+        episode = await dataset.episodes[0]
+        await episode._transport.issue_access_grant(episode._revision, episode._document)
+    assert grant_route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize("legacy_status", [200, 405, 503])
+def test_sync_explicit_download_falls_back_once_only_for_unsupported_post(legacy_status: int) -> None:
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    post = respx.post(ACCESS_URL).mock(return_value=httpx.Response(405, text=DOWNLOAD_URL))
+    legacy = respx.get(ACCESS_URL).mock(
+        return_value=_grant_response() if legacy_status == 200 else httpx.Response(legacy_status, text=DOWNLOAD_URL)
+    )
+    if legacy_status == 200:
+        respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
+    with avala.load("acme/navigation") as dataset:
+        if legacy_status == 200:
+            assert dataset.episodes[0].read() == b"test"
+        else:
+            with pytest.raises(DatasetResolverError) as error:
+                dataset.episodes[0].read()
+            assert error.value.status_code == legacy_status
+            assert DOWNLOAD_URL not in _sdk_traceback_locals(error.value)
+    assert post.call_count == legacy.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_status", [200, 405, 503])
+async def test_async_explicit_download_falls_back_once_only_for_unsupported_post(legacy_status: int) -> None:
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    post = respx.post(ACCESS_URL).mock(return_value=httpx.Response(405, text=DOWNLOAD_URL))
+    legacy = respx.get(ACCESS_URL).mock(
+        return_value=_grant_response() if legacy_status == 200 else httpx.Response(legacy_status, text=DOWNLOAD_URL)
+    )
+    if legacy_status == 200:
+        respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
+    async with await avala.async_load("acme/navigation") as dataset:
+        episode = await dataset.episodes[0]
+        if legacy_status == 200:
+            assert await episode.read() == b"test"
+        else:
+            with pytest.raises(DatasetResolverError) as error:
+                await episode.read()
+            assert error.value.status_code == legacy_status
+            assert DOWNLOAD_URL not in _sdk_traceback_locals(error.value)
+    assert post.call_count == legacy.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [401, 403, 404, 410, 429, 500, 503])
+def test_sync_explicit_download_never_falls_back_for_denial_or_failure(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(resolver_module.time, "sleep", lambda delay: None)
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    body = FIXTURES["withdrawn_response"]["body"] if status == 410 else {"detail": "rejected"}
+    post = respx.post(ACCESS_URL).mock(return_value=httpx.Response(status, json=body))
+    with avala.load("acme/navigation") as dataset:
+        with pytest.raises(DatasetResolverError):
+            dataset.episodes[0].read()
+    assert post.call_count == (4 if status == 429 else 1)
+    assert not any(call.request.method == "GET" and str(call.request.url) == ACCESS_URL for call in respx.calls)
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 404, 410, 429, 500, 503])
+async def test_async_explicit_download_never_falls_back_for_denial_or_failure(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def no_delay(delay: float) -> None:
+        pass
+
+    monkeypatch.setattr(async_resolver_module.asyncio, "sleep", no_delay)
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    body = FIXTURES["withdrawn_response"]["body"] if status == 410 else {"detail": "rejected"}
+    post = respx.post(ACCESS_URL).mock(return_value=httpx.Response(status, json=body))
+    async with await avala.async_load("acme/navigation") as dataset:
+        episode = await dataset.episodes[0]
+        with pytest.raises(DatasetResolverError):
+            await episode.read()
+    assert post.call_count == (4 if status == 429 else 1)
+    assert not any(call.request.method == "GET" and str(call.request.url) == ACCESS_URL for call in respx.calls)
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +290,56 @@ def test_provider_hostname_allowlist_accepts_path_style_s3_dualstack() -> None:
     assert is_provider_hostname_allowed("aws_s3", "s3.dualstack.us-west-2.amazonaws.com")
 
 
+@respx.mock
+@pytest.mark.parametrize("jurisdiction", ["", ".eu"])
+def test_sync_r2_grant_reads_global_and_eu_endpoints(jurisdiction: str) -> None:
+    url = f"https://0123456789abcdef0123456789abcdef{jurisdiction}.r2.cloudflarestorage.com/b/key"
+    grant = copy.deepcopy(FIXTURES["access_grant_response"]["body"])
+    grant.update(provider="cloudflare_r2", url=url)
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(grant))
+    download = respx.get(url).mock(return_value=httpx.Response(200, content=b"test"))
+    with avala.load("acme/navigation") as dataset:
+        assert dataset.episodes[0].read() == b"test"
+    assert download.call_count == 1
+
+
+@respx.mock
+@pytest.mark.asyncio
+@pytest.mark.parametrize("jurisdiction", ["", ".eu"])
+async def test_async_r2_grant_reads_global_and_eu_endpoints(jurisdiction: str) -> None:
+    url = f"https://0123456789abcdef0123456789abcdef{jurisdiction}.r2.cloudflarestorage.com/b/key"
+    grant = copy.deepcopy(FIXTURES["access_grant_response"]["body"])
+    grant.update(provider="cloudflare_r2", url=url)
+    respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
+    respx.get(OBJECTS_URL).mock(return_value=_page_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(grant))
+    download = respx.get(url).mock(return_value=httpx.Response(200, content=b"test"))
+    async with await avala.async_load("acme/navigation") as dataset:
+        episode = await dataset.episodes[0]
+        assert await episode.read() == b"test"
+    assert download.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "unsafe_url",
+    [
+        "https://0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com.evil.test/b/key",
+        "https://0123456789abcdef0123456789abcdef.fedramp.r2.cloudflarestorage.com/b/key",
+        "https://anything.eu.r2.cloudflarestorage.com/b/key",
+        "https://0123456789abcdef0123456789abcdef.eu.eu.r2.cloudflarestorage.com/b/key",
+        "https://user@0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com/b/key",
+        "https://0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com:443/b/key",
+        "http://0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com/b/key",
+        "https://0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com/b/key#fragment",
+    ],
+)
+def test_r2_grant_keeps_strict_url_policy(unsafe_url: str) -> None:
+    with pytest.raises(DatasetIntegrityError):
+        resolver_module._validate_provider_url(unsafe_url, "cloudflare_r2", BASE_URL)
+
+
 @pytest.mark.parametrize("vector", FIXTURES["load_reference_vectors"])
 def test_load_reference_vectors(vector: dict[str, Any]) -> None:
     if not vector["valid"]:
@@ -206,7 +386,7 @@ def test_sync_dataset_walk_retries_429_after_server_delay(monkeypatch: pytest.Mo
     monkeypatch.setattr(resolver_module.time, "sleep", sleeps.append)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(
+    grant_route = respx.post(ACCESS_URL).mock(
         side_effect=[
             httpx.Response(429, headers={"Retry-After": "7"}, json={"detail": "throttled"}),
             _grant_response(),
@@ -233,7 +413,7 @@ async def test_async_dataset_walk_retries_429_after_server_delay(monkeypatch: py
     monkeypatch.setattr(async_resolver_module.asyncio, "sleep", record_sleep)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(
+    grant_route = respx.post(ACCESS_URL).mock(
         side_effect=[
             httpx.Response(429, headers={"Retry-After": "7"}, json={"detail": "throttled"}),
             _grant_response(),
@@ -428,7 +608,7 @@ def test_manifest_object_pages_cannot_exceed_the_server_page_limit() -> None:
 def test_sync_loader_resolves_lazily_and_downloads_verified_raw_bytes_without_credentials() -> None:
     resolve_route = respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     page_route = respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    grant_route = respx.post(ACCESS_URL).mock(return_value=_grant_response())
     download_route = respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     with avala.load("acme/navigation") as dataset:
@@ -480,7 +660,7 @@ def test_gcs_download_requests_raw_content_encoded_bytes() -> None:
     )
     respx.get(RESOLVE_URL).mock(return_value=httpx.Response(200, json=resolved))
     respx.get(OBJECTS_URL).mock(return_value=_page_response(page))
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(grant))
     download_route = respx.get(grant["url"]).mock(
         return_value=httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=raw_gzip)
     )
@@ -497,7 +677,7 @@ def test_verified_open_rolls_large_content_out_of_memory(monkeypatch: pytest.Mon
     monkeypatch.setattr(resolver_module, "_DOWNLOAD_SPOOL_MEMORY_BYTES", 1)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     with pytest.warns(MutableDatasetAliasWarning):
@@ -514,7 +694,7 @@ def test_path_style_s3_dualstack_grant_downloads() -> None:
     grant["url"] = "https://s3.dualstack.us-west-2.amazonaws.com/fixture.bucket/episodes/0001.mcap?fixture=1"
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(grant))
     download_route = respx.get(grant["url"]).mock(return_value=httpx.Response(200, content=b"test"))
 
     with avala.load("acme/navigation") as dataset:
@@ -531,7 +711,7 @@ def test_sync_spool_is_allocated_before_requesting_a_signed_grant(monkeypatch: p
     monkeypatch.setattr(datasets_module, "_new_download_spool", fail_spool_allocation)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    grant_route = respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(MemoryError, match="spool allocation"):
@@ -549,7 +729,7 @@ async def test_async_spool_is_allocated_before_requesting_a_signed_grant(monkeyp
     monkeypatch.setattr(datasets_module, "_new_async_download_spool", fail_spool_allocation)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    grant_route = respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     async with await avala.async_load("acme/navigation") as dataset:
         episode = await dataset.episodes[0]
@@ -568,7 +748,7 @@ def test_read_rejects_objects_above_the_default_memory_budget_before_granting_ac
     page["results"][0]["size_bytes"] = oversized_bytes
     respx.get(RESOLVE_URL).mock(return_value=httpx.Response(200, json=resolved))
     respx.get(OBJECTS_URL).mock(return_value=_page_response(page))
-    grant_route = respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    grant_route = respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     with pytest.warns(MutableDatasetAliasWarning):
         with avala.load("acme/navigation") as dataset:
@@ -583,7 +763,7 @@ def test_read_rejects_objects_above_the_default_memory_budget_before_granting_ac
 async def test_async_loader_supports_awaitable_ordinal_lookup_and_verified_read() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     download_route = respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     async with await avala.async_load("acme/navigation") as dataset:
@@ -618,7 +798,7 @@ async def test_async_gcs_download_requests_raw_content_encoded_bytes() -> None:
     )
     respx.get(RESOLVE_URL).mock(return_value=httpx.Response(200, json=resolved))
     respx.get(OBJECTS_URL).mock(return_value=_page_response(page))
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(grant))
     download_route = respx.get(grant["url"]).mock(
         return_value=httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=raw_gzip)
     )
@@ -646,7 +826,7 @@ async def test_async_disk_backed_spool_writes_run_off_the_event_loop(monkeypatch
     monkeypatch.setattr(async_resolver_module.asyncio, "to_thread", run_in_thread)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     async with await avala.async_load("acme/navigation") as dataset:
@@ -672,7 +852,7 @@ async def test_async_disk_backed_read_runs_off_the_event_loop(monkeypatch: pytes
     monkeypatch.setattr(async_resolver_module.asyncio, "to_thread", run_in_thread)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     async with await avala.async_load("acme/navigation") as dataset:
@@ -690,7 +870,7 @@ async def test_async_httpx_download_error_has_no_signed_url_context_or_traceback
 
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(side_effect=fail_download)
 
     async with await avala.async_load("acme/navigation") as dataset:
@@ -713,7 +893,7 @@ async def test_async_download_cancellation_has_no_signed_url_context_or_tracebac
 
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(side_effect=cancel_download)
 
     async with await avala.async_load("acme/navigation") as dataset:
@@ -1459,7 +1639,7 @@ def test_short_access_grant_is_discarded_and_refreshed_once() -> None:
     short_grant["expires_at"] = "2026-08-23T18:00:04Z"
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(side_effect=[_grant_response(short_grant), _grant_response()])
+    grant_route = respx.post(ACCESS_URL).mock(side_effect=[_grant_response(short_grant), _grant_response()])
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     with avala.load("acme/navigation") as dataset:
@@ -1474,7 +1654,7 @@ def test_elapsed_time_after_grant_receipt_reduces_usable_lifetime(monkeypatch: p
     monkeypatch.setattr(resolver_module, "_monotonic_time", lambda: next(monotonic_times))
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(side_effect=[_grant_response(), _grant_response()])
+    grant_route = respx.post(ACCESS_URL).mock(side_effect=[_grant_response(), _grant_response()])
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     with avala.load("acme/navigation") as dataset:
@@ -1492,7 +1672,7 @@ def test_grant_at_server_expiry_is_refreshed_without_a_clock_skew_extension(
     monkeypatch.setattr(resolver_module, "_monotonic_time", lambda: 100.0)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    grant_route = respx.get(ACCESS_URL).mock(side_effect=[_grant_response(), _grant_response()])
+    grant_route = respx.post(ACCESS_URL).mock(side_effect=[_grant_response(), _grant_response()])
     respx.get(DOWNLOAD_URL).mock(return_value=httpx.Response(200, content=b"test"))
 
     with avala.load("acme/navigation") as dataset:
@@ -1512,7 +1692,7 @@ def test_grant_date_rejects_more_than_thirty_seconds_of_negative_clock_skew(
     )
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError, match="invalid_grant_expiry"):
@@ -1536,7 +1716,7 @@ def test_access_grant_repeated_identities_must_match_manifest_object(field: str,
     mismatched_grant[field] = value
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(mismatched_grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(mismatched_grant))
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError, match="access_grant_identity_mismatch") as exc_info:
@@ -1551,7 +1731,7 @@ def test_access_grant_expiry_cannot_exceed_300_seconds_after_server_date() -> No
     long_grant["expires_at"] = "2026-08-23T18:05:01Z"
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(long_grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(long_grant))
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError, match="invalid_grant_expiry"):
@@ -1575,7 +1755,7 @@ def test_unsafe_grant_url_is_rejected_without_leaking_the_secret_url(unsafe_url:
     unsafe_grant["url"] = unsafe_url
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(unsafe_grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(unsafe_grant))
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError) as exc_info:
@@ -1604,7 +1784,7 @@ def test_avala_proxy_download_path_is_validated_after_normalization(unsafe_path:
     unsafe_grant["url"] = f"https://api.avala.ai{unsafe_path}?secret=do-not-log"
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response(unsafe_grant))
+    respx.post(ACCESS_URL).mock(return_value=_grant_response(unsafe_grant))
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError, match="untrusted_download_path") as exc_info:
@@ -1624,7 +1804,7 @@ def test_avala_proxy_download_path_is_validated_after_normalization(unsafe_path:
 def test_download_failures_are_typed_and_url_free(download_response: httpx.Response, reason: str) -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(return_value=download_response)
 
     with avala.load("acme/navigation") as dataset:
@@ -1647,7 +1827,7 @@ def test_httpx_download_error_is_not_retained_as_a_signed_url_context() -> None:
 
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
     respx.get(DOWNLOAD_URL).mock(side_effect=fail_download)
 
     with avala.load("acme/navigation") as dataset:
@@ -1666,7 +1846,7 @@ def test_httpx_download_error_is_not_retained_as_a_signed_url_context() -> None:
 def test_partial_grant_failure_is_detached_from_signed_url_context() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=httpx.Response(200, stream=_PartialSyncGrantStream()))
+    respx.post(ACCESS_URL).mock(return_value=httpx.Response(200, stream=_PartialSyncGrantStream()))
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetResolverError, match="transport_error") as exc_info:
@@ -1681,7 +1861,7 @@ def test_partial_grant_failure_is_detached_from_signed_url_context() -> None:
 async def test_async_partial_grant_failure_is_detached_from_signed_url_context() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=httpx.Response(200, stream=_PartialAsyncGrantStream()))
+    respx.post(ACCESS_URL).mock(return_value=httpx.Response(200, stream=_PartialAsyncGrantStream()))
 
     async with await avala.async_load("acme/navigation") as dataset:
         episode = await dataset.episodes[0]
@@ -1697,7 +1877,7 @@ async def test_async_partial_grant_failure_is_detached_from_signed_url_context()
 async def test_async_partial_grant_cancellation_is_detached_from_signed_url_context() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=httpx.Response(200, stream=_PartialCancelledAsyncGrantStream()))
+    respx.post(ACCESS_URL).mock(return_value=httpx.Response(200, stream=_PartialCancelledAsyncGrantStream()))
 
     async with await avala.async_load("acme/navigation") as dataset:
         episode = await dataset.episodes[0]
@@ -1712,7 +1892,7 @@ async def test_async_partial_grant_cancellation_is_detached_from_signed_url_cont
 def test_malformed_successful_grant_response_is_scrubbed_before_raise() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(
+    respx.post(ACCESS_URL).mock(
         return_value=httpx.Response(200, json=[copy.deepcopy(FIXTURES["access_grant_response"]["body"])])
     )
 
@@ -1728,7 +1908,7 @@ def test_malformed_successful_grant_response_is_scrubbed_before_raise() -> None:
 async def test_async_malformed_successful_grant_response_is_scrubbed_before_raise() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(
+    respx.post(ACCESS_URL).mock(
         return_value=httpx.Response(200, json=[copy.deepcopy(FIXTURES["access_grant_response"]["body"])])
     )
 
@@ -1754,7 +1934,7 @@ def test_unexpected_grant_json_decoder_failure_is_detached_and_scrubbed(
     monkeypatch.setattr(httpx.Response, "json", fail_grant_json)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError, match="invalid_resolver_response") as exc_info:
@@ -1779,7 +1959,7 @@ async def test_async_unexpected_grant_json_decoder_failure_is_detached_and_scrub
     monkeypatch.setattr(httpx.Response, "json", fail_grant_json)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     async with await avala.async_load("acme/navigation") as dataset:
         episode = await dataset.episodes[0]
@@ -1800,7 +1980,7 @@ def test_unexpected_grant_parser_failure_is_scrubbed_before_raise(
     monkeypatch.setattr(resolver_module, "_validate_provider_url", fail_provider_validation)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     with avala.load("acme/navigation") as dataset:
         with pytest.raises(DatasetIntegrityError, match="invalid_access_grant") as exc_info:
@@ -1821,7 +2001,7 @@ async def test_async_unexpected_grant_parser_failure_is_scrubbed_before_raise(
     monkeypatch.setattr(resolver_module, "_validate_provider_url", fail_provider_validation)
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(return_value=_grant_response())
+    respx.post(ACCESS_URL).mock(return_value=_grant_response())
 
     async with await avala.async_load("acme/navigation") as dataset:
         episode = await dataset.episodes[0]
@@ -1836,7 +2016,7 @@ async def test_async_unexpected_grant_parser_failure_is_scrubbed_before_raise(
 def test_rejected_grant_response_is_scrubbed_before_raise() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(
+    respx.post(ACCESS_URL).mock(
         return_value=httpx.Response(503, json=copy.deepcopy(FIXTURES["access_grant_response"]["body"]))
     )
 
@@ -1864,7 +2044,7 @@ def test_grant_style_410_response_is_scrubbed_before_invalid_withdrawal_raise() 
 async def test_async_rejected_grant_response_is_scrubbed_before_raise() -> None:
     respx.get(RESOLVE_URL).mock(return_value=_resolve_response())
     respx.get(OBJECTS_URL).mock(return_value=_page_response())
-    respx.get(ACCESS_URL).mock(
+    respx.post(ACCESS_URL).mock(
         return_value=httpx.Response(503, json=copy.deepcopy(FIXTURES["access_grant_response"]["body"]))
     )
 

@@ -76,14 +76,24 @@ def main(ctx: click.Context, api_key: str | None, base_url: str | None, output: 
     """Avala CLI — interact with the Avala API from your terminal."""
     ctx.ensure_object(dict)
     ctx.obj["output_format"] = output
+    ctx.obj["api_key"] = api_key
+    ctx.obj["base_url"] = base_url
 
-    # Skip client creation for commands that don't hit the API. ``view`` is the
-    # no-account local viewer wedge — it must work with no API key at all.
-    if ctx.invoked_subcommand in ("configure", "shell-completion", "view") or ctx.resilient_parsing:
+    # The datasets group decides after Click resolves its child command:
+    # ``datasets resolve`` uses a separate anonymous transport. Constructing an
+    # unused authenticated Client can fail on stale credentials/proxy settings.
+    if ctx.invoked_subcommand in ("configure", "shell-completion", "view", "datasets") or ctx.resilient_parsing:
         return
 
+    _initialize_client(ctx)
+
+
+def _initialize_client(ctx: click.Context) -> None:
+    """Preserve authenticated command initialization, including help without a key."""
+    api_key = ctx.obj.get("api_key")
+    base_url = ctx.obj.get("base_url")
     try:
-        kwargs: dict = {}
+        kwargs: dict[str, str] = {}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:

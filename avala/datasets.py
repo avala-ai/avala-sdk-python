@@ -228,10 +228,10 @@ class ResolvedDatasetObject:
         return dict(self._document.model_extra or {})
 
     def _live_grant(self) -> DatasetAccessGrant:
-        grant = self._transport.issue_access_grant(self._revision, self._document)
+        grant = self._transport.issue_access_grant(self._revision, self._document, explicit_download=True)
         if grant.remaining_seconds < _MIN_GRANT_REMAINING_SECONDS:
             del grant
-            grant = self._transport.issue_access_grant(self._revision, self._document)
+            grant = self._transport.issue_access_grant(self._revision, self._document, explicit_download=True)
         if grant.remaining_seconds < _MIN_GRANT_REMAINING_SECONDS:
             del grant
             raise DatasetIntegrityError("grant_expiry_too_short")
@@ -502,10 +502,10 @@ class AsyncResolvedDatasetObject:
         return dict(self._document.model_extra or {})
 
     async def _live_grant(self) -> DatasetAccessGrant:
-        grant = await self._transport.issue_access_grant(self._revision, self._document)
+        grant = await self._transport.issue_access_grant(self._revision, self._document, explicit_download=True)
         if grant.remaining_seconds < _MIN_GRANT_REMAINING_SECONDS:
             del grant
-            grant = await self._transport.issue_access_grant(self._revision, self._document)
+            grant = await self._transport.issue_access_grant(self._revision, self._document, explicit_download=True)
         if grant.remaining_seconds < _MIN_GRANT_REMAINING_SECONDS:
             del grant
             raise DatasetIntegrityError("grant_expiry_too_short")

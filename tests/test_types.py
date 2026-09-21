@@ -7,9 +7,10 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
-from avala.types.dataset import Dataset, DatasetSequence
+from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
 from avala.types.export import Export
 from avala.types.project import Project
+from avala.types.slice import SliceItem
 from avala.types.task import Task
 
 
@@ -162,3 +163,24 @@ class TestTaskModel:
         assert task.uid == "task-uid"
         assert task.type == "annotation"
         assert isinstance(task.created_at, datetime)
+
+
+@pytest.mark.parametrize("model", [DatasetItem, DatasetSequence, SliceItem])
+@pytest.mark.parametrize("hidden", [True, False])
+def test_hidden_state_survives_response_parsing(model: type, hidden: bool) -> None:
+    item = model.model_validate({"uid": "item-uid", "is_hidden": hidden})
+    assert item.is_hidden is hidden
+    assert item.model_dump()["is_hidden"] is hidden
+
+
+@pytest.mark.parametrize("model", [DatasetItem, DatasetSequence, SliceItem])
+def test_hidden_state_defaults_for_older_server_responses(model: type) -> None:
+    item = model.model_validate({"uid": "item-uid"})
+    assert item.is_hidden is False
+    assert "is_hidden" not in item.model_fields_set
+
+
+@pytest.mark.parametrize("model", [DatasetItem, DatasetSequence, SliceItem])
+def test_hidden_state_rejects_null_like_server_boolean_field(model: type) -> None:
+    with pytest.raises(PydanticValidationError):
+        model.model_validate({"uid": "item-uid", "is_hidden": None})

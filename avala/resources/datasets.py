@@ -12,6 +12,8 @@ from avala._uploads import (
     MAX_RETRIES,
     STATE_DIR,
     append_completed,
+    bind_managed_batch,
+    bind_managed_source,
     cached_user_uid,
     clear_completed,
     file_stamp,
@@ -20,6 +22,7 @@ from avala._uploads import (
     load_completed_stamps,
     load_remote_keys,
     migrate_state,
+    managed_upload_batch,
     remember_user_uid,
     save_completed,
     sleep_backoff,
@@ -227,6 +230,11 @@ class Datasets(BaseSyncResource):
         limit: int | None = None,
         cursor: str | None = None,
     ) -> CursorPage[Dataset]:
+        """List authorized workspace datasets; visibility filtering grants no access.
+
+        Servers supporting Unlisted accept private, unlisted, or public filters.
+        A known Unlisted URL does not add a dataset to this workspace listing.
+        """
         params: dict[str, Any] = {}
         if data_type is not None:
             params["data_type"] = data_type
@@ -319,6 +327,23 @@ class Datasets(BaseSyncResource):
         data = self._transport.request("POST", "/datasets/", json=payload)
         return Dataset.model_validate(data)
 
+    def prepare_manual_upload_batch(
+        self,
+        dataset_name: str,
+        *,
+        organization_uid: str | None = None,
+        resume: bool = True,
+        state_key: str | None = None,
+    ) -> str | None:
+        """Allocate or recover a batch using the same state_key as upload_files."""
+        key = state_key or dataset_name
+        return managed_upload_batch(
+            _STATE_DIR,
+            key,
+            fingerprint=self._upload_fingerprint(organization_uid, dataset_name, key),
+            resume=resume,
+        )
+
     def create_manual_upload_url(
         self,
         *,
@@ -326,8 +351,9 @@ class Datasets(BaseSyncResource):
         file_path_in_dataset: str,
         content_length: int,
         organization_uid: str | None = None,
+        dataset_upload_uid: str | None = None,
     ) -> dict[str, Any]:
-        """Create a presigned POST target for Avala-managed local dataset uploads.
+        """Create a managed upload target, using POST or negotiated v2 PUT/multipart.
 
         Pass ``organization_uid`` for an organization-owned dataset. The server
         roots the S3 key on the org slug (``orgs/<slug>/…``) instead of the
@@ -340,6 +366,8 @@ class Datasets(BaseSyncResource):
             "file_path_in_dataset": file_path_in_dataset,
             "content_length": content_length,
         }
+        if dataset_upload_uid is not None:
+            payload.update(upload_protocol_version=2, dataset_upload_uid=dataset_upload_uid)
         if organization_uid is not None:
             payload["organization_uid"] = organization_uid
         result: dict[str, Any] = self._transport.request(
@@ -522,6 +550,7 @@ class Datasets(BaseSyncResource):
         industry: int | None = None,
         license: int | None = None,
         organization_uid: str | None = None,
+        dataset_upload_uid: str | None = None,
     ) -> Dataset:
         """Create a dataset from files uploaded with ``create_manual_upload_url``.
 
@@ -545,6 +574,8 @@ class Datasets(BaseSyncResource):
             payload["license"] = license
         if organization_uid is not None:
             payload["organization_uid"] = organization_uid
+        if dataset_upload_uid is not None:
+            payload["dataset_upload_uid"] = dataset_upload_uid
         data = self._transport.request("POST", "/datasets/manual-upload/", json=payload)
         return Dataset.model_validate(data)
 
@@ -560,6 +591,7 @@ class Datasets(BaseSyncResource):
         resume: bool = True,
         state_key: str | None = None,
         clear_state_on_success: bool = False,
+        dataset_upload_uid: str | None = None,
     ) -> int:
         """Upload local files to Avala-managed storage for a (to-be-created) dataset.
 
@@ -569,7 +601,7 @@ class Datasets(BaseSyncResource):
         :meth:`create_from_manual_upload` (or use :meth:`create_from_local`).
 
         ``on_progress(relative, size)`` fires per file transferred *this* call;
-        ``on_skipped(relative)`` fires per file the checkpoint let this call skip.
+        ``on_skipped(relative)`` fires per file the checkpoint or server already completed.
         A progress display that counts only the former against the full manifest
         misreports a successful resume as a near-total failure — 1 of 100 files,
         with 99 already safely uploaded — so anything showing a total needs both.
@@ -656,6 +688,7 @@ class Datasets(BaseSyncResource):
         # advisory lookup into a full re-upload. That is the same failure the
         # org path was just fixed for, reached through the other branch.
         fingerprint = self._upload_fingerprint(organization_uid, dataset_name, key)
+        bind_managed_batch(_STATE_DIR, key, fingerprint=fingerprint, batch=dataset_upload_uid)
         # Loaded unconditionally. ``resume`` controls whether confirmed files are
         # SKIPPED; it must not disable the stale-key check below, which is a
         # safety property rather than an optimisation.
@@ -802,6 +835,7 @@ class Datasets(BaseSyncResource):
                     stamp=stamps.get(relative),
                     completed=unchanged,
                     fingerprint=fingerprint,
+                    expected_batch=dataset_upload_uid,
                     # Loud on failure: this line is the only durable record that
                     # the POST succeeded. Continuing without it means an
                     # interrupted run whose local file is later removed has no
@@ -826,6 +860,7 @@ class Datasets(BaseSyncResource):
                         key,
                         completed,
                         fingerprint=fingerprint,
+                        expected_batch=dataset_upload_uid,
                         stamps=stamps,
                         remote=remote,
                         dataset_name=dataset_name,
@@ -839,6 +874,13 @@ class Datasets(BaseSyncResource):
             local_path, relative = item
             size = os.path.getsize(local_path)
             last_exc: Exception | None = None
+            managed_sent = [0]
+            managed_sent_lock = threading.Lock()
+
+            def record_sent(size: int) -> None:
+                with managed_sent_lock:
+                    managed_sent[0] += size
+
             for attempt in range(MAX_RETRIES):
                 if stop.is_set():
                     return 0
@@ -858,46 +900,72 @@ class Datasets(BaseSyncResource):
                 # quota and progress report a size that was never sent.
                 if sent_stamp is not None:
                     size = sent_stamp[0]
+                transferred_bytes = size
                 try:
                     info = self.create_manual_upload_url(
                         dataset_name=dataset_name,
                         file_path_in_dataset=relative,
                         content_length=size,
                         organization_uid=organization_uid,
+                        **({"dataset_upload_uid": dataset_upload_uid} if dataset_upload_uid is not None else {}),
                     )
-                    validate_presigned_url(info["url"])
-                    fields = info["fields"]
-                    content_type = (
-                        fields.get("Content-Type") or mimetypes.guess_type(local_path)[0] or "application/octet-stream"
-                    )
-                    if stop.is_set():
-                        # A peer failed while this worker was blocked in
-                        # presign. Starting a potentially multi-gigabyte POST
-                        # now burns bandwidth and quota for a run that is
-                        # already known to have failed, and the executor would
-                        # wait for it before surfacing the original error.
-                        return 0
-                    with open(local_path, "rb") as fh:
-                        resp = httpx.post(
-                            info["url"],
-                            data=fields,
-                            files={"file": (os.path.basename(local_path), fh, content_type)},
-                            # Finite, and generous. `timeout=None` let a half-open
-                            # connection block this worker forever: the stall never
-                            # reached the retry classifier, and because a request in
-                            # flight cannot be interrupted, a peer's permanent
-                            # failure could not surface either — the executor waits
-                            # for this future no matter what `stop` says. The write
-                            # timeout is the one that must be large, since it bounds
-                            # inactivity rather than the whole upload.
+                    if dataset_upload_uid is not None and info.get("method") in {"PUT", "MULTIPART"}:
+                        from avala._managed_upload import transfer_managed_upload
+
+                        bind_managed_source(_STATE_DIR, dataset_upload_uid, relative, file_stamp(local_path))
+
+                        transfer_managed_upload(
+                            local_path,
+                            info,
+                            request=self._transport.request,
                             timeout=httpx.Timeout(
                                 connect=_UPLOAD_TIMEOUTS[0],
                                 read=_UPLOAD_TIMEOUTS[1],
                                 write=_UPLOAD_TIMEOUTS[2],
                                 pool=_UPLOAD_TIMEOUTS[3],
                             ),
+                            cancelled=stop.is_set,
+                            on_sent=record_sent,
                         )
-                        resp.raise_for_status()
+                        transferred_bytes = managed_sent[0]
+                    else:
+                        if info.get("method", "POST") != "POST":
+                            raise ValueError("Unsupported managed upload method.")
+                        validate_presigned_url(info["url"])
+                        fields = info["fields"]
+                        content_type = (
+                            fields.get("Content-Type")
+                            or mimetypes.guess_type(local_path)[0]
+                            or "application/octet-stream"
+                        )
+                        if stop.is_set():
+                            # A peer failed while this worker was blocked in
+                            # presign. Starting a potentially multi-gigabyte POST
+                            # now burns bandwidth and quota for a run that is
+                            # already known to have failed, and the executor would
+                            # wait for it before surfacing the original error.
+                            return 0
+                        with open(local_path, "rb") as fh:
+                            resp = httpx.post(
+                                info["url"],
+                                data=fields,
+                                files={"file": (os.path.basename(local_path), fh, content_type)},
+                                # Finite, and generous. `timeout=None` let a half-open
+                                # connection block this worker forever: the stall never
+                                # reached the retry classifier, and because a request in
+                                # flight cannot be interrupted, a peer's permanent
+                                # failure could not surface either , the executor waits
+                                # for this future no matter what `stop` says. The write
+                                # timeout is the one that must be large, since it bounds
+                                # inactivity rather than the whole upload.
+                                timeout=httpx.Timeout(
+                                    connect=_UPLOAD_TIMEOUTS[0],
+                                    read=_UPLOAD_TIMEOUTS[1],
+                                    write=_UPLOAD_TIMEOUTS[2],
+                                    pool=_UPLOAD_TIMEOUTS[3],
+                                ),
+                            )
+                            resp.raise_for_status()
                 except Exception as exc:  # broad on purpose — classified just below
                     last_exc = exc
                     # A transport error or timeout is AMBIGUOUS: the provider may
@@ -942,6 +1010,7 @@ class Datasets(BaseSyncResource):
                                 stamp=None,
                                 completed=False,
                                 fingerprint=fingerprint,
+                                expected_batch=dataset_upload_uid,
                                 strict=True,
                             )
                         except OSError as persist_error:
@@ -959,9 +1028,12 @@ class Datasets(BaseSyncResource):
                         f"{relative} was modified while it was being uploaded, so the bytes that "
                         "landed are not the current file. Re-run to upload it again."
                     )
-                if on_progress is not None:
-                    on_progress(relative, size)
-                return size
+                if transferred_bytes == 0:
+                    if on_skipped is not None:
+                        on_skipped(relative)
+                elif on_progress is not None:
+                    on_progress(relative, transferred_bytes)
+                return transferred_bytes
             # Unreachable: the loop either returns or raises. Kept so the
             # function has no implicit ``None`` return path.
             raise RuntimeError(f"{relative}: upload failed after {MAX_RETRIES} attempts: {last_exc}")
@@ -1004,6 +1076,7 @@ class Datasets(BaseSyncResource):
                     key,
                     completed,
                     fingerprint=fingerprint,
+                    expected_batch=dataset_upload_uid,
                     stamps=stamps,
                     remote=remote,
                     dataset_name=dataset_name,
@@ -1052,6 +1125,7 @@ class Datasets(BaseSyncResource):
                         key,
                         completed,
                         fingerprint=fingerprint,
+                        expected_batch=dataset_upload_uid,
                         stamps=stamps,
                         remote=remote,
                         dataset_name=dataset_name,
@@ -1068,7 +1142,7 @@ class Datasets(BaseSyncResource):
         # work to describe. Only clear it on a fully clean run, and only if the
         # caller isn't going to need it for a later finalize step.
         if clear_state_on_success and len(completed) >= len(items):
-            clear_completed(_STATE_DIR, key, fingerprint=fingerprint)
+            clear_completed(_STATE_DIR, key, fingerprint=fingerprint, expected_batch=dataset_upload_uid)
         return uploaded_bytes
 
     def create_from_local(
@@ -1187,6 +1261,7 @@ class Datasets(BaseSyncResource):
                     limit=quota.limit,
                     used=quota.used,
                 )
+        dataset_upload_uid = self.prepare_manual_upload_batch(name, organization_uid=organization_uid, resume=resume)
         self.upload_files(
             dataset_name=name,
             files=files,
@@ -1199,6 +1274,7 @@ class Datasets(BaseSyncResource):
             # create call below fails — or its response is lost — a re-run
             # should resume at finalization, not re-send every byte.
             clear_state_on_success=False,
+            dataset_upload_uid=dataset_upload_uid,
         )
         self.assert_storage_root_unchanged(storage_root_before, organization_uid=organization_uid)
 
@@ -1228,6 +1304,7 @@ class Datasets(BaseSyncResource):
             license=license,
             organization_uid=organization_uid,
             metadata=metadata,
+            dataset_upload_uid=dataset_upload_uid,
         )
         # The dataset exists, so the checkpoint has nothing left to protect.
         # Same fingerprint the upload used, or this clears a different
@@ -1236,6 +1313,7 @@ class Datasets(BaseSyncResource):
             _STATE_DIR,
             state_key,
             fingerprint=self._upload_fingerprint(organization_uid, name),
+            expected_batch=dataset_upload_uid,
         )
         if wait:
             dataset = self.wait(dataset.uid, status="created", interval=10.0, timeout=wait_timeout)
@@ -1362,6 +1440,11 @@ class AsyncDatasets(BaseAsyncResource):
         limit: int | None = None,
         cursor: str | None = None,
     ) -> CursorPage[Dataset]:
+        """List authorized workspace datasets; visibility filtering grants no access.
+
+        Servers supporting Unlisted accept private, unlisted, or public filters.
+        A known Unlisted URL does not add a dataset to this workspace listing.
+        """
         params: dict[str, Any] = {}
         if data_type is not None:
             params["data_type"] = data_type
@@ -1461,8 +1544,9 @@ class AsyncDatasets(BaseAsyncResource):
         file_path_in_dataset: str,
         content_length: int,
         organization_uid: str | None = None,
+        dataset_upload_uid: str | None = None,
     ) -> dict[str, Any]:
-        """Create a presigned POST target for Avala-managed local dataset uploads.
+        """Create a managed upload target, using POST or negotiated v2 PUT/multipart.
 
         ``organization_uid`` must match what :meth:`create_from_manual_upload`
         is later given — see the sync counterpart for why.
@@ -1472,6 +1556,8 @@ class AsyncDatasets(BaseAsyncResource):
             "file_path_in_dataset": file_path_in_dataset,
             "content_length": content_length,
         }
+        if dataset_upload_uid is not None:
+            payload.update(upload_protocol_version=2, dataset_upload_uid=dataset_upload_uid)
         if organization_uid is not None:
             payload["organization_uid"] = organization_uid
         result: dict[str, Any] = await self._transport.request(
@@ -1505,6 +1591,7 @@ class AsyncDatasets(BaseAsyncResource):
         industry: int | None = None,
         license: int | None = None,
         organization_uid: str | None = None,
+        dataset_upload_uid: str | None = None,
     ) -> Dataset:
         """Create a dataset from files uploaded with ``create_manual_upload_url``.
 
@@ -1527,6 +1614,8 @@ class AsyncDatasets(BaseAsyncResource):
             payload["license"] = license
         if organization_uid is not None:
             payload["organization_uid"] = organization_uid
+        if dataset_upload_uid is not None:
+            payload["dataset_upload_uid"] = dataset_upload_uid
         data = await self._transport.request("POST", "/datasets/manual-upload/", json=payload)
         return Dataset.model_validate(data)
 

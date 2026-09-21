@@ -15,8 +15,11 @@ import json
 import os
 import random
 import re
+import shutil
+import stat
 import time
-from collections.abc import Iterable, Iterator
+import uuid
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any, TextIO
 from urllib.parse import urlparse
@@ -57,6 +60,11 @@ PRESIGNED_URL_HOST_SUFFIXES = (
 # from an attacker's bucket. Only pinning the expected bucket would, and the
 # server does not tell the client which bucket to expect.
 _S3_ENDPOINT_HOST = re.compile(r"(?:^|\.)s3(?:[-.][a-z0-9-]+)*\.amazonaws\.com$")
+
+# Match account endpoints, including the EU jurisdiction, without trusting
+# arbitrary subdomains of Cloudflare or Avala.
+_R2_ENDPOINT_HOST = re.compile(r"^[0-9a-f]{32}(?:\.eu)?\.r2\.cloudflarestorage\.com$")
+_MANAGED_UPLOAD_HOSTS = frozenset({"data.avala.ai"})
 
 # Distinguishes concurrent writers' temp/claim files. A shared name let two
 # processes clobber each other's half-written checkpoint.
@@ -109,14 +117,20 @@ def validate_presigned_url(url: str) -> None:
     host = (parsed.hostname or "").lower()
     if not host:
         raise ValueError("Upload URL has no host.")
-    allowed = _S3_ENDPOINT_HOST.search(host) is not None or any(
-        host == suffix.lstrip(".") or host.endswith(suffix) for suffix in PRESIGNED_URL_HOST_SUFFIXES
+    if parsed.username is not None or parsed.password is not None or parsed.port is not None or parsed.fragment:
+        raise ValueError("Upload URL must not contain credentials, a port, or a fragment.")
+    allowed = (
+        host in _MANAGED_UPLOAD_HOSTS
+        or _R2_ENDPOINT_HOST.fullmatch(host) is not None
+        or _S3_ENDPOINT_HOST.search(host) is not None
+        or any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in PRESIGNED_URL_HOST_SUFFIXES)
     )
     if not allowed:
         raise ValueError(
             f"Upload URL host '{host}' is not in the presigned-URL allow-list. "
             "Expected an S3 endpoint (e.g. bucket.s3.us-east-1.amazonaws.com), GCS "
-            "(*.storage.googleapis.com), or Azure Blob (*.blob.core.windows.net)."
+            "(*.storage.googleapis.com), Azure Blob (*.blob.core.windows.net), "
+            "an R2 account endpoint, or data.avala.ai."
         )
 
 
@@ -477,6 +491,16 @@ def migrate_state(state_dir: Path, key: str, *, from_fingerprint: str, to_finger
             dst_snapshot = state_path(state_dir, key, fingerprint=to_fingerprint)
             src_journal = journal_path(state_dir, key, fingerprint=from_fingerprint)
             dst_journal = journal_path(state_dir, key, fingerprint=to_fingerprint)
+            src_batch = src_snapshot.with_suffix(".batch")
+            dst_batch = dst_snapshot.with_suffix(".batch")
+            if src_batch.exists():
+                if dst_batch.exists() and src_batch.read_text() != dst_batch.read_text():
+                    raise UploadStateError(
+                        "Two upload batches have different identities; resume each original batch separately."
+                    )
+                if not dst_batch.exists():
+                    dst_batch.write_bytes(src_batch.read_bytes())
+                    _restrict(dst_batch)
             try:
                 orphans = sorted(src_journal.parent.glob(f"{src_journal.name}.*.compacting"))
             except OSError:
@@ -497,6 +521,7 @@ def migrate_state(state_dir: Path, key: str, *, from_fingerprint: str, to_finger
             if not all(_adopt(src, dst, json_lines=json_lines) for src, dst, json_lines in work):
                 return
             _write_redirect_unlocked(state_dir, key, from_fingerprint, to_fingerprint)
+            src_batch.unlink(missing_ok=True)
             for src, _dst, _json_lines in work:
                 try:
                     src.unlink(missing_ok=True)
@@ -556,7 +581,76 @@ def _open_lock_file(path: Path) -> Iterator[TextIO]:
 
 
 @contextlib.contextmanager
-def _state_lock(state_dir: Path, key: str, fingerprint: str | None) -> Iterator[None]:
+def _strict_state_lock(lock_path: Path) -> Iterator[None]:
+    """Fail closed on contention or unsupported locking; retain the lock inode."""
+    lock_stack = contextlib.ExitStack()
+    unlock: Callable[[], None] | None = None
+    try:
+        _strict_private_dir(lock_path.parent)
+        before = lock_path.lstat() if os.path.lexists(lock_path) else None
+        if before is not None and not stat.S_ISREG(before.st_mode):
+            raise OSError("Invalid lock file")
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(lock_path, flags, 0o600)
+        handle = lock_stack.enter_context(os.fdopen(descriptor, "r+"))
+        opened = os.fstat(handle.fileno())
+        retained = lock_path.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (before is not None and (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino))
+            or not stat.S_ISREG(retained.st_mode)
+            or ((retained.st_dev, retained.st_ino) != (opened.st_dev, opened.st_ino))
+        ):
+            raise OSError("Invalid lock file")
+        if os.name == "posix":
+            os.fchmod(handle.fileno(), 0o600)
+        unlock = _acquire_strict_lock(handle)
+    except (ImportError, OSError):
+        lock_stack.close()
+        raise UploadStateError("Fleet upload is busy or its checkpoint cannot be locked safely. Retry later.") from None
+    try:
+        yield
+    finally:
+        try:
+            unlock()
+        finally:
+            lock_stack.close()
+
+
+def _strict_private_dir(directory: Path) -> None:
+    """Refuse directory aliases; require POSIX modes, inherit Windows ACLs."""
+    if directory.is_symlink():
+        raise OSError("Invalid state directory")
+    directory.mkdir(parents=True, exist_ok=True)
+    if not stat.S_ISDIR(directory.lstat().st_mode):
+        raise OSError("Invalid state directory")
+    if os.name == "posix":
+        directory.chmod(0o700)
+
+
+def _acquire_strict_lock(handle: TextIO, *, platform: str = os.name) -> Callable[[], None]:
+    """Use a nonblocking native lock, including the Python 3.9 Windows backend."""
+    if platform == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        # The CRT permits locking beyond EOF, so an empty persistent file needs
+        # no sentinel write that could race another process's locked byte.
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]  # Windows-only stdlib API
+
+        def unlock() -> None:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]  # Windows-only stdlib API
+
+        return unlock
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _state_lock(state_dir: Path, key: str, fingerprint: str | None, *, strict: bool = False) -> Iterator[None]:
     """Serialize journal appends against claim/compaction, across processes.
 
     Two prior rounds narrowed this race (per-process temp files, claim by
@@ -567,12 +661,16 @@ def _state_lock(state_dir: Path, key: str, fingerprint: str | None) -> Iterator[
     unlinked file — reported as durable, readable by nobody — and that is the
     one record proving an object exists.
 
-    ``flock`` is advisory and POSIX-only. On Windows this degrades to no
-    locking, which is the same exposure that existed before and still leaves
-    single-process uploads (every documented workflow) correct; making the
-    lock mandatory there would mean a second implementation to test with no
-    user asking for it yet.
+    The default mode retains historical advisory POSIX locking and fail-open
+    behavior on unavailable locks or Windows. Opt-in ``strict`` mode uses a
+    nonblocking POSIX or Windows lock and fails closed; callers choose the
+    lock lifetime.
     """
+    if strict:
+        lock_path = state_path(state_dir, key, fingerprint=fingerprint).with_suffix(".lock")
+        with _strict_state_lock(lock_path):
+            yield
+        return
     try:
         import fcntl
     except ImportError:  # pragma: no cover - non-POSIX
@@ -650,6 +748,15 @@ def _resolved_state_lock(state_dir: Path, key: str, fingerprint: str | None) -> 
             current = target
 
 
+def _check_checkpoint_batch(state_dir: Path, key: str, fingerprint: str | None, expected_batch: str | None) -> None:
+    """Fence writes while the caller holds the resolved destination lock."""
+    path = state_path(state_dir, key, fingerprint=fingerprint).with_suffix(".batch")
+    current = path.read_text().strip() if path.exists() else None
+    expected = str(uuid.UUID(expected_batch)) if expected_batch is not None else None
+    if current != expected:
+        raise UploadStateError("Upload batch changed during this upload; resume the current batch before continuing.")
+
+
 def append_completed(
     state_dir: Path,
     key: str,
@@ -659,6 +766,7 @@ def append_completed(
     completed: bool,
     fingerprint: str | None = None,
     strict: bool = False,
+    expected_batch: str | None = None,
 ) -> None:
     """Durably record one file's outcome, in O(1).
 
@@ -673,8 +781,8 @@ def append_completed(
     record that survives `kill -9` the moment it is written. The snapshot
     becomes a compaction of this log rather than the only copy.
 
-    Never raises: an unwritable state dir must not fail an upload that is
-    otherwise succeeding.
+    Batch rotation always raises to prevent stale writers contaminating the
+    replacement checkpoint. Filesystem errors raise only when strict is set.
     """
     try:
         _ensure_private_dir(state_dir)
@@ -682,6 +790,7 @@ def append_completed(
         # uploader waiting behind identity migration therefore writes to the
         # canonical journal instead of recreating a retired source journal.
         with _resolved_state_lock(state_dir, key, fingerprint) as resolved:
+            _check_checkpoint_batch(state_dir, key, resolved, expected_batch)
             line = json.dumps({"r": relative, "s": stamp, "c": completed, "f": resolved}, separators=(",", ":"))
             jpath = journal_path(state_dir, key, fingerprint=resolved)
             existed = jpath.exists()
@@ -950,6 +1059,7 @@ def save_completed(
     fingerprint: str | None = None,
     stamps: dict[str, list[int]] | None = None,
     remote: Iterable[str] | None = None,
+    expected_batch: str | None = None,
     **extra: Any,
 ) -> None:
     """Persist the confirmed set for ``key``, atomically, and compact the journal.
@@ -985,6 +1095,7 @@ def save_completed(
     # claims it absorbed are retired. Snapshot + claims + live journal must be
     # one view, not three individually safe reads separated by writer windows.
     with _resolved_state_lock(state_dir, key, fingerprint) as resolved:
+        _check_checkpoint_batch(state_dir, key, resolved, expected_batch)
         path = state_path(state_dir, key, fingerprint=resolved)
         jpath = journal_path(state_dir, key, fingerprint=resolved)
         claim_target = jpath.with_name(f"{jpath.name}.{unique}.compacting")
@@ -1112,20 +1223,128 @@ def upload_fingerprint(
     return f"{_canonical_base_url(base_url)}|{organization_uid or ''}|{dataset_name}|{account}"
 
 
-def clear_completed(state_dir: Path, key: str, *, fingerprint: str | None = None) -> None:
-    """Drop the checkpoint for ``key`` — call only once everything succeeded.
+def clear_completed(
+    state_dir: Path, key: str, *, fingerprint: str | None = None, expected_batch: str | None = None
+) -> None:
+    """Retire only this successful operation's checkpoint, never a newer batch.
 
-    Never raises. This runs *after* the server has committed the dataset, so
-    letting a filesystem problem escape here would turn a completed operation
-    into an exception, and the caller's natural retry then hits a name collision
-    it cannot resolve. A stale checkpoint file is harmless by comparison — the
-    next run's fingerprint check or a successful re-upload retires it.
+    Never raises after finalization: filesystem errors retain recovery state.
+    Legacy callers omit expected_batch and may clear only an unbound checkpoint.
     """
-    for path in (
-        state_path(state_dir, key, fingerprint=fingerprint),
-        journal_path(state_dir, key, fingerprint=fingerprint),
-    ):
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    try:
+        with _resolved_state_lock(state_dir, key, fingerprint) as resolved:
+            batch_path = state_path(state_dir, key, fingerprint=resolved).with_suffix(".batch")
+            current = str(uuid.UUID(batch_path.read_text().strip())) if batch_path.exists() else None
+            expected = str(uuid.UUID(expected_batch)) if expected_batch is not None else None
+            if current != expected:
+                return
+            if current is not None:
+                with _state_lock(state_dir / "managed-sources", current, None):
+                    shutil.rmtree(_managed_source_directory(state_dir, current), ignore_errors=True)
+            for path in (
+                state_path(state_dir, key, fingerprint=resolved),
+                journal_path(state_dir, key, fingerprint=resolved),
+                batch_path,
+            ):
+                path.unlink(missing_ok=True)
+    except (OSError, ValueError, UploadStateError):
+        pass
+
+
+def managed_upload_batch(state_dir: Path, key: str, *, fingerprint: str, resume: bool = True) -> str | None:
+    """Persist the provider-binding identity before sending any file bytes.
+
+    A legacy checkpoint must finish with the original protocol because its
+    already-uploaded objects do not belong to a managed upload batch.
+    """
+    _ensure_private_dir(state_dir)
+    with _resolved_state_lock(state_dir, key, fingerprint) as resolved:
+        path = state_path(state_dir, key, fingerprint=resolved).with_suffix(".batch")
+        if path.exists():
+            try:
+                previous_batch = str(uuid.UUID(path.read_text().strip()))
+                if resume:
+                    return previous_batch
+            except ValueError as exc:
+                raise UploadStateError("Upload batch checkpoint is invalid; preserve it for recovery.") from exc
+        completed, _stamps, remote = _load_upload_state_unlocked(state_dir, key, resolved)
+        if not path.exists() and (completed or remote):
+            return None
+        if path.exists():
+            # Keep the old remote session discoverable for recovery. Restarting
+            # locally never aborts its multipart upload or deletes its objects.
+            history = path.with_suffix(".retired-batches")
+            with history.open("a") as handle:
+                _restrict(history)
+                handle.write(previous_batch + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            # Invalidate skips before publishing a new batch. A crash leaves
+            # either the old recoverable batch or a fresh batch with no skips.
+            # Keep every remote key so legacy POST's stale-file guard still works.
+            with journal_path(state_dir, key, fingerprint=resolved).open("a") as journal:
+                _restrict(Path(journal.name))
+                for relative in completed:
+                    journal.write(json.dumps({"r": relative, "s": INVALID_STAMP, "c": False, "f": resolved}) + "\n")
+                journal.flush()
+                os.fsync(journal.fileno())
+        batch = str(uuid.uuid4())
+        temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        with temporary.open("x") as handle:
+            _restrict(temporary)
+            handle.write(batch)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+        return batch
+
+
+def _managed_source_directory(state_dir: Path, batch: str) -> Path:
+    return state_dir / "managed-sources" / hashlib.sha256(batch.encode()).hexdigest()
+
+
+def bind_managed_source(state_dir: Path, batch: str, relative: str, stamp: list[int]) -> None:
+    """Reject changed files before reusing an immutable managed upload session."""
+    root = state_dir / "managed-sources"
+    _ensure_private_dir(root)
+    # One stable lock inode per batch, rather than one permanent lock per file.
+    # Keep it outside the disposable directory so concurrent waiters stay safe.
+    with _state_lock(root, batch, None):
+        directory = _managed_source_directory(state_dir, batch)
+        _ensure_private_dir(directory)
+        identity = hashlib.sha256(relative.encode()).hexdigest()
+        path = directory / f"{identity}.json"
+        if path.exists():
+            try:
+                previous = json.loads(path.read_text())
+            except ValueError as exc:
+                raise UploadStateError("Managed source checkpoint is invalid; start a fresh upload batch.") from exc
+            if previous != stamp:
+                raise UploadStateError("Local file changed since this batch started; start a fresh upload batch.")
+            return
+        with path.open("x") as handle:
+            _restrict(path)
+            json.dump(stamp, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+
+def bind_managed_batch(state_dir: Path, key: str, *, fingerprint: str, batch: str | None) -> None:
+    """Do not let another batch inherit this destination's completed files."""
+    _ensure_private_dir(state_dir)
+    with _resolved_state_lock(state_dir, key, fingerprint) as resolved:
+        path = state_path(state_dir, key, fingerprint=resolved).with_suffix(".batch")
+        if path.exists():
+            if batch is None or path.read_text().strip() != str(uuid.UUID(batch)):
+                raise UploadStateError("Upload batch differs from the saved checkpoint; use its original batch UUID.")
+            return
+        if batch is None:
+            return
+        completed, _stamps, remote = _load_upload_state_unlocked(state_dir, key, resolved)
+        if completed or remote:
+            raise UploadStateError("A new managed batch cannot reuse legacy file checkpoints.")
+        with path.open("x") as handle:
+            _restrict(path)
+            handle.write(str(uuid.UUID(batch)))
+            handle.flush()
+            os.fsync(handle.fileno())

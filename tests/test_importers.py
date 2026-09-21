@@ -235,6 +235,9 @@ def test_upload_files_rejects_non_allowlisted_upload_host(tmp_path):
         "storage.googleapis.com",
         "b.storage.googleapis.com",
         "acct.blob.core.windows.net",
+        "0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
+        "0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com",
+        "data.avala.ai",
     ],
 )
 def test_presigned_allow_list_accepts_real_storage_endpoints(host):
@@ -255,6 +258,11 @@ def test_presigned_allow_list_accepts_real_storage_endpoints(host):
         # Right label, wrong domain / suffix-extension past the real one.
         "s3.evil.com",
         "b.s3.us-east-1.amazonaws.com.evil.com",
+        "data.avala.ai.evil.com",
+        "evil.data.avala.ai",
+        "anything.r2.cloudflarestorage.com",
+        "0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com.evil.com",
+        "0123456789abcdef0123456789abcdef.fedramp.r2.cloudflarestorage.com",
     ],
 )
 def test_presigned_allow_list_rejects_non_storage_aws_hosts(host):
@@ -492,15 +500,21 @@ def test_resume_does_not_skip_a_file_that_changed_on_disk(tmp_path):
     s3 = respx.post(S3_URL).mock(return_value=httpx.Response(204))
 
     client = Client(api_key="test-key")
+    batch = client.datasets.prepare_manual_upload_batch("X")
     client.datasets.upload_files(
-        dataset_name="X", files=files, workers=1, state_key="chg", clear_state_on_success=False
+        dataset_name="X",
+        files=files,
+        workers=1,
+        state_key="chg",
+        clear_state_on_success=False,
+        dataset_upload_uid=batch,
     )
     assert s3.call_count == 1
 
     # The source file is regenerated with different contents.
     (tmp_path / "a.jpg").write_bytes(b"y" * 64)
 
-    client.datasets.upload_files(dataset_name="X", files=files, workers=1, state_key="chg")
+    client.datasets.upload_files(dataset_name="X", files=files, workers=1, state_key="chg", dataset_upload_uid=batch)
     client.close()
 
     assert s3.call_count == 2  # re-sent, not skipped
@@ -1770,3 +1784,196 @@ def test_migration_redirects_an_inflight_fallback_append(tmp_path, monkeypatch):
     assert up.load_remote_keys(tmp_path, "ds", fingerprint=canonical) == {"early.jpg", "late.jpg"}
     assert up.load_remote_keys(tmp_path, "ds", fingerprint=fallback) == {"early.jpg", "late.jpg"}
     assert not up.journal_path(tmp_path, "ds", fingerprint=fallback).exists()
+
+
+@respx.mock
+def test_v2_flag_off_preserves_post_and_batch_binding_at_finalize(tmp_path):
+    _write_files(tmp_path, ["a.jpg"])
+    _wire_upload({"uid": "d1", "name": "N", "slug": "n", "data_type": "image"})
+    presign = respx.post(PRESIGN_URL).mock(
+        return_value=httpx.Response(200, json={"method": "POST", "url": S3_URL, "fields": {"key": "k"}})
+    )
+    finalize = respx.post(FINALIZE_URL).mock(
+        return_value=httpx.Response(201, json={"uid": "d1", "name": "N", "slug": "n", "data_type": "image"})
+    )
+    with Client(api_key="test-key") as client:
+        client.datasets.create_from_local(source=str(tmp_path), name="N", slug="n", data_type="image")
+    requested = json.loads(presign.calls.last.request.content)
+    created = json.loads(finalize.calls.last.request.content)
+    assert requested["upload_protocol_version"] == 2
+    assert requested["dataset_upload_uid"] == created["dataset_upload_uid"]
+    assert len(created["dataset_upload_uid"]) == 36
+
+
+@respx.mock
+def test_v2_put_verifies_before_dataset_finalize(tmp_path):
+    _write_files(tmp_path, ["a.jpg"])
+    url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/b/key"
+    uid = "11111111-1111-4111-8111-111111111111"
+    respx.get(QUOTA_URL).mock(return_value=httpx.Response(200, json={"used": 0, "limit": 10**12}))
+    respx.post(PRESIGN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "method": "PUT",
+                "url": url,
+                "upload_uid": uid,
+                "object_key": "b/key",
+                "headers": {"Content-Type": "image/jpeg"},
+            },
+        )
+    )
+    put = respx.put(url).mock(return_value=httpx.Response(412))
+    complete = respx.post(f"{BASE_URL}/datasets/manual-upload/uploads/{uid}/complete/").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    def finalize(request):
+        assert complete.called
+        return httpx.Response(201, json={"uid": "d1", "name": "N", "slug": "n", "data_type": "image"})
+
+    respx.post(FINALIZE_URL).mock(side_effect=finalize)
+    with Client(api_key="test-key") as client:
+        client.datasets.create_from_local(source=str(tmp_path), name="N", slug="n", data_type="image")
+    assert put.call_count == 1
+    assert put.calls.last.request.headers["content-length"] == "16"
+
+
+@respx.mock
+def test_custom_state_key_restart_rotates_the_checkpoint_used_by_upload_files(tmp_path):
+    _write_files(tmp_path, ["a.jpg"])
+    files = [(str(tmp_path / "a.jpg"), "a.jpg")]
+    respx.post(PRESIGN_URL).mock(return_value=httpx.Response(200, json={"method": "POST", "url": S3_URL, "fields": {}}))
+    post = respx.post(S3_URL).mock(return_value=httpx.Response(204))
+    with Client(api_key="test-key") as client:
+        first = client.datasets.prepare_manual_upload_batch("X", state_key="custom")
+        client.datasets.upload_files(dataset_name="X", files=files, state_key="custom", dataset_upload_uid=first)
+        fresh = client.datasets.prepare_manual_upload_batch("X", state_key="custom", resume=False)
+        assert fresh != first
+        sent = client.datasets.upload_files(
+            dataset_name="X", files=files, state_key="custom", dataset_upload_uid=fresh, resume=False
+        )
+    assert post.call_count == 2
+    assert sent == 16
+
+
+@respx.mock
+@pytest.mark.parametrize("method", ["PUT", "MULTIPART"])
+def test_server_completed_managed_resume_reports_skipped_and_zero_transferred_bytes(tmp_path, method):
+    _write_files(tmp_path, ["a.jpg"])
+    uid = "11111111-1111-4111-8111-111111111111"
+    presign = respx.post(PRESIGN_URL).mock(
+        return_value=httpx.Response(200, json={"method": method, "upload_uid": uid, "complete": True})
+    )
+    complete = respx.post(f"{BASE_URL}/datasets/manual-upload/uploads/{uid}/complete/").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    progress, skipped = [], []
+    with Client(api_key="test-key") as client:
+        batch = client.datasets.prepare_manual_upload_batch("X")
+        sent = client.datasets.upload_files(
+            dataset_name="X",
+            files=[(str(tmp_path / "a.jpg"), "a.jpg")],
+            dataset_upload_uid=batch,
+            on_progress=lambda relative, size: progress.append((relative, size)),
+            on_skipped=skipped.append,
+        )
+    assert presign.called and complete.called
+    assert sent == 0
+    assert progress == []
+    assert skipped == ["a.jpg"]
+
+
+@respx.mock
+def test_managed_part_success_survives_retry_in_reported_bytes(tmp_path, monkeypatch):
+    import avala._managed_upload as managed
+
+    _write_files(tmp_path, ["a.jpg"])
+    uid = "11111111-1111-4111-8111-111111111111"
+    respx.post(PRESIGN_URL).mock(return_value=httpx.Response(200, json={"method": "MULTIPART", "upload_uid": uid}))
+    attempts = []
+
+    def transfer(*args, on_sent, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 1:
+            on_sent(10)
+            raise httpx.ReadError("other part failed")
+        on_sent(6)
+        return 6
+
+    monkeypatch.setattr(managed, "transfer_managed_upload", transfer)
+    monkeypatch.setattr("avala.resources.datasets.sleep_backoff", lambda *args: None)
+    progress = []
+    with Client(api_key="test-key") as client:
+        batch = client.datasets.prepare_manual_upload_batch("X")
+        sent = client.datasets.upload_files(
+            dataset_name="X",
+            files=[(str(tmp_path / "a.jpg"), "a.jpg")],
+            dataset_upload_uid=batch,
+            on_progress=lambda rel, size: progress.append(size),
+        )
+    assert sent == 16
+    assert progress == [16]
+    assert len(attempts) == 2
+
+
+@respx.mock
+def test_active_old_upload_cannot_complete_restarted_batch(tmp_path):
+    from avala.errors import UploadStateError
+
+    _write_files(tmp_path, ["a.jpg"])
+    respx.post(PRESIGN_URL).mock(return_value=httpx.Response(200, json={"method": "POST", "url": S3_URL, "fields": {}}))
+    with Client(api_key="test-key") as client:
+        old = client.datasets.prepare_manual_upload_batch("X")
+        newer = []
+
+        def rotate(request):
+            newer.append(client.datasets.prepare_manual_upload_batch("X", resume=False))
+            return httpx.Response(204)
+
+        respx.post(S3_URL).mock(side_effect=rotate)
+        with pytest.raises(UploadStateError, match="batch changed"):
+            client.datasets.upload_files(
+                dataset_name="X", files=[(str(tmp_path / "a.jpg"), "a.jpg")], dataset_upload_uid=old
+            )
+        posted = respx.post(S3_URL).mock(return_value=httpx.Response(204))
+        before = posted.call_count
+        sent = client.datasets.upload_files(
+            dataset_name="X", files=[(str(tmp_path / "a.jpg"), "a.jpg")], dataset_upload_uid=newer[0]
+        )
+        assert posted.call_count == before + 1
+    assert sent == 16
+
+
+@respx.mock
+@pytest.mark.parametrize("accepted_this_call", [False, True])
+def test_put_precondition_replay_counts_only_newly_accepted_bytes(tmp_path, monkeypatch, accepted_this_call):
+    _write_files(tmp_path, ["a.jpg"])
+    uid = "11111111-1111-4111-8111-111111111111"
+    url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/b/key"
+    respx.post(PRESIGN_URL).mock(
+        return_value=httpx.Response(200, json={"method": "PUT", "upload_uid": uid, "url": url})
+    )
+    put = respx.put(url).mock(
+        side_effect=[httpx.Response(200), httpx.Response(412)] if accepted_this_call else [httpx.Response(412)]
+    )
+    complete = respx.post(f"{BASE_URL}/datasets/manual-upload/uploads/{uid}/complete/").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json={})]
+        if accepted_this_call
+        else [httpx.Response(200, json={})]
+    )
+    monkeypatch.setattr("avala.resources.datasets.sleep_backoff", lambda *args: None)
+    progress, skipped = [], []
+    with Client(api_key="test-key") as client:
+        batch = client.datasets.prepare_manual_upload_batch("X")
+        sent = client.datasets.upload_files(
+            dataset_name="X",
+            files=[(str(tmp_path / "a.jpg"), "a.jpg")],
+            dataset_upload_uid=batch,
+            on_progress=lambda rel, size: progress.append(size),
+            on_skipped=skipped.append,
+        )
+    assert sent == (16 if accepted_this_call else 0)
+    assert progress == ([16] if accepted_this_call else [])
+    assert skipped == ([] if accepted_this_call else ["a.jpg"])
+    assert put.call_count == complete.call_count == (2 if accepted_this_call else 1)

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 
 import click
 
 from avala.cli._output import human_bytes, print_detail, print_table
+from avala.types.fleet import Recording
+from avala.types.fleet_upload import UploadProgress
 
 
 @click.group("fleet")
@@ -224,6 +227,9 @@ def get_recording(ctx: click.Context, uid: str) -> None:
 )
 @click.option("--device", "device_uid", default=None, help="Device UID (creates recording automatically)")
 @click.option("--storage-config", "storage_config_uid", default=None, help="Storage config UID for S3 target")
+@click.option(
+    "--managed", is_flag=True, default=False, help="Explicit managed MCAP upload for an enrolled organization"
+)
 @click.option("--workers", type=int, default=4, help="Parallel upload threads (default: 4)")
 @click.option("--dry-run", is_flag=True, default=False, help="Preview what would be uploaded")
 @click.option("--wait", "wait_after", is_flag=True, default=False, help="Wait for server-side processing to complete")
@@ -235,56 +241,64 @@ def upload_recording(
     recording_uid: str | None,
     device_uid: str | None,
     storage_config_uid: str | None,
+    managed: bool,
     workers: int,
     dry_run: bool,
     wait_after: bool,
     wait_timeout: float,
 ) -> None:
-    """Upload local files to a fleet recording via resumable presigned URLs.
+    """Upload exact local files using retained source and session evidence."""
+    if managed:
+        from avala.cli._fleet_managed import upload_managed
 
-    Supports resume after network drops or device reboots. Automatically
-    picks up where the last upload left off.
-    """
-    from pathlib import Path
+        upload_managed(ctx, source, recording_uid, storage_config_uid, workers, dry_run, wait_after, wait_timeout)
+        return
+
+    from avala._uploads import _canonical_uuid
+    from avala.errors import UploadStateError
 
     client = ctx.obj["client"]
-
-    # Resolve or create recording
-    if recording_uid:
-        rec = client.fleet.recordings.get(recording_uid)
-        click.echo(f"Uploading to recording: {rec.uid}", err=True)
-    elif device_uid:
+    if wait_after and (not math.isfinite(wait_timeout) or wait_timeout < 0):
+        raise click.ClickException("Wait timeout must be finite and nonnegative.")
+    if not recording_uid:
+        if not device_uid:
+            raise click.ClickException("Either --recording or --device is required.")
         raise click.ClickException("Creating recordings via CLI is not yet supported. Provide --recording UID.")
-    else:
-        raise click.ClickException("Either --recording or --device is required.")
-
-    # Collect files for summary
-    source_path = Path(source).resolve()
-    file_count = sum(1 for _ in source_path.rglob("*") if _.is_file())
-    total_bytes = sum(f.stat().st_size for f in source_path.rglob("*") if f.is_file())
-
-    click.echo(f"Source: {source_path}", err=True)
+    try:
+        inventory = client.fleet.uploads.collect_files(source)
+    except UploadStateError as error:
+        raise click.ClickException(str(error)) from None
+    except Exception:
+        raise click.ClickException("Source inventory could not be read safely.") from None
+    file_count = len(inventory.files)
+    total_bytes = inventory.total_bytes
+    click.echo(f"Source: {inventory.source}", err=True)
     click.echo(f"Files: {file_count} ({human_bytes(total_bytes)})", err=True)
 
-    if file_count == 0:
-        raise click.ClickException(f"No files found in {source}")
-
-    # Dry run
     if dry_run:
         click.echo("\n[DRY RUN] Would upload:", err=True)
-        for f in list(source_path.rglob("*"))[:20]:
-            if f.is_file():
-                rel = f.relative_to(source_path).as_posix()
-                click.echo(f"  {rel} ({human_bytes(f.stat().st_size)})", err=True)
+        for file in inventory.files[:20]:
+            click.echo(f"  {file.path} ({human_bytes(file.size_bytes)})", err=True)
         if file_count > 20:
             click.echo(f"  ... and {file_count - 20} more files", err=True)
         click.echo(f"\nTotal: {file_count} files ({human_bytes(total_bytes)})", err=True)
         return
 
-    # Check for resume state
-    state_file = Path.home() / ".avala" / "uploads" / f"{rec.uid}.json"
-    if state_file.exists():
-        click.echo("Resuming previous upload session...", err=True)
+    requested_uid = _canonical_uuid(recording_uid)
+
+    def _get_recording() -> Recording:
+        observed: Recording = client.fleet.recordings.get(requested_uid)
+        if _canonical_uuid(observed.uid) != requested_uid:
+            raise click.ClickException("Recording response names a different recording.")
+        return observed
+
+    try:
+        rec = _get_recording()
+    except click.ClickException:
+        raise
+    except Exception:
+        raise click.ClickException("Recording could not be loaded.") from None
+    click.echo(f"Uploading to recording: {rec.uid}", err=True)
 
     # Upload with progress
     try:
@@ -296,7 +310,7 @@ def upload_recording(
 
     last_uploaded = [0]
 
-    def _on_progress(p):  # type: ignore[no-untyped-def]
+    def _on_progress(p: UploadProgress) -> None:
         if progress_bar:
             delta = p.uploaded_files - last_uploaded[0]
             if delta > 0:
@@ -306,46 +320,57 @@ def upload_recording(
     start = time.monotonic()
     try:
         session = client.fleet.uploads.upload_recording(
-            rec.uid,
+            requested_uid,
             source,
             storage_config_uid=storage_config_uid,
             max_workers=workers,
             on_progress=_on_progress,
         )
-    except Exception as exc:
+    except UploadStateError as error:
         if progress_bar:
             progress_bar.close()
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(error)) from None
+    except Exception:
+        if progress_bar:
+            progress_bar.close()
+        raise click.ClickException("Upload failed. Retain the checkpoint and retry with the original inputs.") from None
 
     if progress_bar:
         progress_bar.close()
 
     elapsed = time.monotonic() - start
     click.echo(
-        f"\nDone in {elapsed:.1f}s — {session.confirmed_files}/{session.total_files} files confirmed.",
+        f"\n{session.confirmed_files}/{session.total_files} files confirmed in {elapsed:.1f}s; session {session.status}.",
         err=True,
     )
 
-    # Wait for processing
-    if wait_after and session.status != "completed":
+    # Recording readiness and the exact upload session must both settle.
+    if wait_after:
         click.echo(f"\nWaiting for recording {rec.uid} to finish processing...", err=True)
         poll_start = time.monotonic()
-        try:
-            rec = client.fleet.recordings.get(rec.uid)
-            while rec.status not in ("ready", "error") and (time.monotonic() - poll_start) < wait_timeout:
-                poll_elapsed = int(time.monotonic() - poll_start)
-                click.echo(f"  status={rec.status} (elapsed: {poll_elapsed}s)", err=True)
-                time.sleep(10)
-                rec = client.fleet.recordings.get(rec.uid)
-        except Exception as exc:
-            raise click.ClickException(f"Error while waiting: {exc}")
-
-        if rec.status == "ready":
-            click.echo(f"Recording {rec.uid} is ready.", err=True)
-        elif rec.status == "error":
-            raise click.ClickException(f"Recording {rec.uid} processing failed.")
-        else:
-            raise click.ClickException(f"Timed out waiting for recording {rec.uid} (status: {rec.status})")
+        observer = None
+        while True:
+            try:
+                rec = _get_recording()
+                if observer is None:
+                    observer = client.fleet.uploads._upload_observer(
+                        requested_uid, session.uid, source, storage_config_uid=storage_config_uid
+                    )
+                observed = observer.poll(verify_source=rec.status == "ready")
+            except click.ClickException:
+                raise
+            except Exception:
+                raise click.ClickException("The retained upload and recording status could not be verified.") from None
+            if rec.status == "error":
+                raise click.ClickException(f"Recording {requested_uid} processing failed.")
+            if rec.status == "ready" and observed.status == "completed":
+                click.echo(f"Recording {requested_uid} is ready.", err=True)
+                break
+            elapsed_wait = time.monotonic() - poll_start
+            if elapsed_wait >= wait_timeout:
+                raise click.ClickException(f"Timed out waiting for recording {requested_uid} and its upload session.")
+            click.echo(f"  recording={rec.status}, upload={observed.status} (elapsed: {int(elapsed_wait)}s)", err=True)
+            time.sleep(min(10, wait_timeout - elapsed_wait))
 
     print_detail(
         f"Recording: {rec.uid}",

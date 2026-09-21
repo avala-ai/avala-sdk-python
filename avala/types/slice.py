@@ -23,6 +23,8 @@ class Slice(BaseModel):
 class SliceItem(BaseModel):
     id: Optional[int] = None
     uid: str
+    # Older API responses omit this non-nullable server field.
+    is_hidden: bool = False
     key: Optional[str] = None
     dataset: Optional[str] = None
     dataset_owner_name: Optional[str] = None

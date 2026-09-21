@@ -27,6 +27,8 @@ class Dataset(BaseModel):
 class DatasetItem(BaseModel):
     id: Optional[int] = None
     uid: str
+    # Older API responses omit this non-nullable server field.
+    is_hidden: bool = False
     key: Optional[str] = None
     dataset: Optional[str] = None
     dataset_owner_name: Optional[str] = None
@@ -47,6 +49,8 @@ class DatasetItem(BaseModel):
 
 class DatasetSequence(BaseModel):
     uid: str
+    # Older API responses omit this non-nullable server field.
+    is_hidden: bool = False
     key: Optional[str] = None
     custom_uuid: Optional[str] = None
     status: Optional[str] = None

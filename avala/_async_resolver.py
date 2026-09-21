@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from typing import Any, BinaryIO, Mapping, cast
+from typing import Any, BinaryIO, Literal, Mapping, cast
 
 import httpx
 
@@ -58,6 +58,7 @@ class AsyncDatasetResolverTransport:
         self,
         path: str,
         *,
+        method: Literal["GET", "POST"] = "GET",
         params: Mapping[str, Any] | None = None,
         expected_dataset_uid: str | None = None,
         expected_revision_sha256: str | None = None,
@@ -67,7 +68,7 @@ class AsyncDatasetResolverTransport:
             response: httpx.Response | None = None
             cancelled = False
             try:
-                response = await self._client.get(url, params=params)
+                response = await self._client.request(method, url, params=params)
             except httpx.HTTPError:
                 pass
             except asyncio.CancelledError:
@@ -78,6 +79,16 @@ class AsyncDatasetResolverTransport:
                 raise asyncio.CancelledError from None
             if response is None:
                 raise DatasetResolverError("transport_error") from None
+            if method == "POST" and response.status_code == 405:
+                # Match the sync transport: one legacy GET only for an
+                # unsupported method, never for a denied or failed grant.
+                del response
+                return await self._request(
+                    path,
+                    params=params,
+                    expected_dataset_uid=expected_dataset_uid,
+                    expected_revision_sha256=expected_revision_sha256,
+                )
             data, unexpected_decode_error = _decode_resolver_json(response)
             if unexpected_decode_error:
                 del data
@@ -195,9 +206,13 @@ class AsyncDatasetResolverTransport:
         self,
         revision: ResolvedRevisionDocument,
         manifest_object: ManifestObjectDocument,
+        *,
+        explicit_download: bool = False,
     ) -> DatasetAccessGrant:
         response, data = await self._request(
             manifest_object.access_path,
+            method="POST" if explicit_download else "GET",
+            params={"transport": "avala-edge-v1"},
             expected_dataset_uid=revision.dataset_uid,
             expected_revision_sha256=revision.revision_sha256,
         )

@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "path_join_vectors": [
+    {
+      "name": "production_api_root",
+      "api_root": "https://api.avala.ai/api/v1",
+      "api_relative_path": "/resolve/uid/6eaf7c2a-4a35-4f41-970f-1c6a26977295/d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173/objects/",
+      "expected_url": "https://api.avala.ai/api/v1/resolve/uid/6eaf7c2a-4a35-4f41-970f-1c6a26977295/d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173/objects/"
+    },
+    {
+      "name": "non_root_development_api_root",
+      "api_root": "https://resolver.example.test/platform/api/v1/",
+      "api_relative_path": "/resolve/uid/6eaf7c2a-4a35-4f41-970f-1c6a26977295/d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173/objects/",
+      "expected_url": "https://resolver.example.test/platform/api/v1/resolve/uid/6eaf7c2a-4a35-4f41-970f-1c6a26977295/d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173/objects/"
+    }
+  ],
+  "resolve_response": {
+    "http_status": 200,
+    "body": {
+      "schema_version": 1,
+      "requested_reference": "acme/navigation@main",
+      "display_reference": "acme/navigation@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "canonical_reference": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "dataset_uid": "6eaf7c2a-4a35-4f41-970f-1c6a26977295",
+      "revision_uid": "2518c8bd-6f61-44c4-ad53-728c4043e27e",
+      "revision_sha256": "d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "state": "published",
+      "manifest": {
+        "schema_version": 1,
+        "sha256": "d6e05875908db10647f241706feb7a578c41cd6daa86eb97a85075eb50e224fc",
+        "object_count": 2,
+        "total_size_bytes": 4,
+        "origins": [
+          {
+            "name": "primary",
+            "kind": "avala",
+            "canonical_ref": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295",
+            "external_revision": ""
+          }
+        ],
+        "objects_path": "/resolve/uid/6eaf7c2a-4a35-4f41-970f-1c6a26977295/d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173/objects/"
+      },
+      "rights": {
+        "status": "declared",
+        "access": "open_download",
+        "name": "Fixture Open Robotics Dataset License v1",
+        "url": "https://example.test/licenses/fixture-open-robotics-dataset-v1",
+        "document_sha256": "098976c942b45f2dbc132f0a328b3644f54e72c74cee82320f3ec166fdf5733f",
+        "attestation_sha256": "ed2775fffba1a8a0e26d87db9a022e5f1ab1ef56d4fd8f809da11a68ae38bcfe"
+      }
+    }
+  },
+  "object_page_response": {
+    "http_status": 200,
+    "query": {
+      "role": "episode",
+      "ordinal": 0
+    },
+    "body": {
+      "schema_version": 1,
+      "canonical_reference": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "revision_sha256": "d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "manifest_sha256": "d6e05875908db10647f241706feb7a578c41cd6daa86eb97a85075eb50e224fc",
+      "next_cursor": null,
+      "previous_cursor": null,
+      "results": [
+        {
+          "object_uid": "48bac4d3-016d-4430-86a9-e3a719630dfb",
+          "logical_path": "episodes/0001.mcap",
+          "role": "episode",
+          "ordinal": 0,
+          "episode_ordinal": null,
+          "content_type": "application/x-mcap",
+          "origin": "primary",
+          "size_bytes": 4,
+          "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+          "access_path": "/resolve/uid/6eaf7c2a-4a35-4f41-970f-1c6a26977295/d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173/objects/48bac4d3-016d-4430-86a9-e3a719630dfb/access/"
+        }
+      ]
+    }
+  },
+  "access_grant_response": {
+    "http_status": 200,
+    "headers": {
+      "Date": "Sun, 23 Aug 2026 18:00:00 GMT"
+    },
+    "body": {
+      "schema_version": 1,
+      "canonical_reference": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "dataset_uid": "6eaf7c2a-4a35-4f41-970f-1c6a26977295",
+      "revision_sha256": "d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "manifest_sha256": "d6e05875908db10647f241706feb7a578c41cd6daa86eb97a85075eb50e224fc",
+      "object_uid": "48bac4d3-016d-4430-86a9-e3a719630dfb",
+      "method": "GET",
+      "provider": "aws_s3",
+      "url": "https://fixture-bucket.s3.us-west-2.amazonaws.com/episodes/0001.mcap?X-Amz-Expires=300&fixture=1",
+      "expires_at": "2026-08-23T18:05:00Z",
+      "size_bytes": 4,
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "range_supported": true
+    }
+  },
+  "withdrawn_response": {
+    "http_status": 410,
+    "body": {
+      "schema_version": 1,
+      "code": "dataset_revision_withdrawn",
+      "canonical_reference": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173",
+      "dataset_uid": "6eaf7c2a-4a35-4f41-970f-1c6a26977295",
+      "revision_sha256": "d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173"
+    }
+  },
+  "provider_host_vectors": [
+    {"provider": "aws_s3", "hostname": "fixture-bucket.s3.us-west-2.amazonaws.com", "allowed": true},
+    {"provider": "aws_s3", "hostname": "fixture-bucket.s3.dualstack.us-west-2.amazonaws.com", "allowed": true},
+    {"provider": "aws_s3", "hostname": "fixture-bucket.s3-accelerate.amazonaws.com", "allowed": true},
+    {"provider": "aws_s3", "hostname": "fixture-bucket.s3.us-west-2.amazonaws.com.evil.test", "allowed": false},
+    {"provider": "gcs", "hostname": "storage.googleapis.com", "allowed": true},
+    {"provider": "gcs", "hostname": "fixture-bucket.storage.googleapis.com", "allowed": true},
+    {"provider": "gcs", "hostname": "nested.fixture-bucket.storage.googleapis.com", "allowed": false},
+    {"provider": "azure_blob", "hostname": "fixtureaccount.blob.core.windows.net", "allowed": true},
+    {"provider": "azure_blob", "hostname": "fixtureaccount.blob.core.windows.net.evil.test", "allowed": false},
+    {"provider": "cloudflare_r2", "hostname": "0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com", "allowed": true},
+    {"provider": "cloudflare_r2", "hostname": "fixture.r2.cloudflarestorage.com", "allowed": false},
+    {"provider": "avala_proxy", "hostname": "api.avala.ai", "api_root_hostname": "api.avala.ai", "allowed": true},
+    {"provider": "avala_proxy", "hostname": "downloads.avala.ai", "api_root_hostname": "api.avala.ai", "allowed": false},
+    {"provider": "aws_s3", "hostname": "127.0.0.1", "allowed": false},
+    {"provider": "gcs", "hostname": "localhost", "allowed": false}
+  ],
+  "load_reference_vectors": [
+    {"reference": "acme/navigation", "revision": null, "selector": "main", "valid": true},
+    {"reference": "acme/navigation", "revision": "main", "selector": "main", "valid": true},
+    {"reference": "acme/navigation@main", "revision": null, "selector": "main", "valid": true},
+    {"reference": "acme/navigation@main", "revision": "main", "error": "selector_and_revision", "valid": false},
+    {"reference": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173", "revision": null, "selector": "d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173", "valid": true},
+    {"reference": "avala://datasets/6eaf7c2a-4a35-4f41-970f-1c6a26977295@d9e6d1627a8229e3efdc92a305bb1b1d50f3ba2292ba8d56e888f4aae6d29173", "revision": "main", "error": "canonical_reference_with_revision", "valid": false}
+  ]
+}

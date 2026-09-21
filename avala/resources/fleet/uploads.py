@@ -1,48 +1,72 @@
-"""Fleet recording upload manager — resumable, per-file upload via presigned URLs."""
+"""Fleet recording uploads with retained source and session evidence."""
 
 from __future__ import annotations
 
-import json
-import logging
-import os
-import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from avala._fleet_uploads import SourceInventory, _failure, collect_source
 from avala._uploads import STATE_DIR, validate_presigned_url
+from avala.errors import UploadStateError
 from avala.resources._base import BaseSyncResource
-from avala.types.fleet_upload import (
-    UploadProgress,
-    UploadSession,
-    UploadStatusResponse,
-    UploadUrlEntry,
-    UploadUrlsResponse,
-)
+from avala.types.fleet_upload import UploadProgress, UploadSession, UploadStatusResponse, UploadUrlsResponse
+from avala.types.fleet_managed_upload import ManagedFleetUploadStatus
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from avala.resources.fleet._upload_guard import _UploadObserver
 
-# Aliased (not imported-and-used directly) so tests can redirect the state dir
-# by monkeypatching this module attribute — see ``tests/test_fleet.py``.
 _STATE_DIR = STATE_DIR
-_URL_BATCH_SIZE = 100
-_CONFIRM_BATCH_SIZE = 500
-_MAX_RETRIES = 3
-
-# The host allow-list and its validator are shared with the dataset upload
-# path; see ``avala/_uploads.py`` for the rationale.
 _validate_presigned_put_url = validate_presigned_url
 
 
 class FleetUploadManager(BaseSyncResource):
-    """Resumable upload manager for fleet recordings.
+    """Upload a bound source without replacing ambiguous server work."""
 
-    Coordinates per-file uploads via server-generated presigned S3 PUT URLs.
-    Tracks state locally for crash recovery and remotely for device replacement.
-    """
+    def collect_files(self, source_dir: str | Path) -> SourceInventory:
+        """Return the same safe local inventory used by upload and CLI preview."""
+        return collect_source(source_dir, state_dir=_STATE_DIR)
 
-    # -- High-level API --
+    def upload_managed_recording(
+        self,
+        recording_uid: str,
+        source_dir: str | Path,
+        *,
+        max_workers: int = 2,
+        wait_timeout: float = 0,
+    ) -> ManagedFleetUploadStatus:
+        """Explicitly upload/resume managed MCAP originals for an enrolled organization.
+
+        Returns the exact pending, failed or published finalization snapshot.
+        ``wait_timeout`` bounds optional publication polling in seconds; zero
+        returns after the first observation. Publication does not imply that
+        the Fleet recording is READY. Retain the receipt and original files.
+        """
+        from avala.resources.fleet._managed_consumer import run_managed_upload
+        from avala.resources.fleet._upload_guard import _QUIET_HTTP
+
+        token = _QUIET_HTTP.set(True)
+        message = str(
+            _failure("managed upload could not establish exact evidence; retain the session and original files")
+        )
+        try:
+            return run_managed_upload(
+                self,
+                recording_uid,
+                source_dir,
+                max_workers=max_workers,
+                wait_timeout=wait_timeout,
+                state_dir=_STATE_DIR,
+            )
+        except UploadStateError as error:
+            message = str(error)
+        except Exception:
+            pass
+        finally:
+            _QUIET_HTTP.reset(token)
+        # A retained internal traceback can expose signed grants in frame locals.
+        # Only safe diagnostic text crosses the public boundary.
+        raise UploadStateError(message)
 
     def upload_recording(
         self,
@@ -53,144 +77,47 @@ class FleetUploadManager(BaseSyncResource):
         max_workers: int = 4,
         on_progress: Callable[[UploadProgress], None] | None = None,
     ) -> UploadSession:
-        """Upload a local directory to a fleet recording via resumable presigned URLs.
+        """Upload or resume an exact source; retain receipts through completion.
 
-        Args:
-            recording_uid: The recording UID to upload into.
-            source_dir: Local directory containing files to upload.
-            storage_config_uid: Storage config UID for S3 target (optional).
-            max_workers: Parallel upload threads (default 4).
-            on_progress: Callback invoked after each confirmation batch.
-
-        Returns:
-            The final UploadSession state.
+        An ambiguous initialization, changed inputs or incomplete server evidence
+        raises UploadStateError. A completing result means processing is queued,
+        not that the recording is ready. Local receipts are deliberately retained.
         """
-        source_path = Path(source_dir).resolve()
-        if not source_path.is_dir():
-            raise ValueError(f"Source directory does not exist: {source_dir}")
+        from avala.resources.fleet._upload_guard import _QUIET_HTTP, run_upload
 
-        # Build file manifest
-        manifest: list[dict[str, Any]] = []
-        for root, _, files in os.walk(source_path):
-            for fname in files:
-                local_path = Path(root) / fname
-                relative = local_path.relative_to(source_path).as_posix()
-                manifest.append({"path": relative, "size_bytes": local_path.stat().st_size})
+        token = _QUIET_HTTP.set(True)
+        try:
+            return run_upload(self, recording_uid, source_dir, storage_config_uid, max_workers, on_progress, _STATE_DIR)
+        except UploadStateError:
+            raise
+        except Exception:
+            raise _failure("upload request failed; the retained receipt must be reconciled before retry") from None
+        finally:
+            _QUIET_HTTP.reset(token)
 
-        if not manifest:
-            raise ValueError(f"No files found in {source_dir}")
+    def _observe_upload(
+        self, recording_uid: str, session_uid: str, source_dir: str | Path, *, storage_config_uid: str | None = None
+    ) -> UploadStatusResponse:
+        """Observe retained finalization without any remote upload mutations."""
+        return self._upload_observer(
+            recording_uid, session_uid, source_dir, storage_config_uid=storage_config_uid
+        ).poll()
 
-        # Try to resume from local state
-        state = self._load_local_state(recording_uid)
-        session_uid: str | None = state.get("session_uid") if state else None
-        confirmed_set: set[str] = set(state.get("confirmed", [])) if state else set()
+    def _upload_observer(
+        self, recording_uid: str, session_uid: str, source_dir: str | Path, *, storage_config_uid: str | None = None
+    ) -> _UploadObserver:
+        """Bind a read-only wait to one validated inventory and destination."""
+        from avala.resources.fleet._upload_guard import _QUIET_HTTP, _UploadObserver
 
-        # Reconcile with server if resuming
-        if session_uid:
-            try:
-                server_status = self.get_upload_status(recording_uid)
-                confirmed_set.update(
-                    p
-                    for p in (manifest_entry["path"] for manifest_entry in manifest)
-                    if p not in server_status.pending_paths
-                )
-                session_uid = server_status.session_uid
-            except Exception:
-                session_uid = None
-                confirmed_set = set()
-
-        # Init new session if needed
-        if not session_uid:
-            session = self.init_upload(recording_uid, manifest, storage_config_uid=storage_config_uid)
-            session_uid = session.uid
-            confirmed_set = set()
-
-        # Save initial state
-        self._save_local_state(recording_uid, session_uid, source_path, confirmed_set, len(manifest))
-
-        # Filter to remaining files
-        remaining = [m for m in manifest if m["path"] not in confirmed_set]
-
-        # Upload in batches
-        uploaded_bytes = 0
-        failed_count = 0
-
-        for batch_start in range(0, len(remaining), _URL_BATCH_SIZE):
-            batch = remaining[batch_start : batch_start + _URL_BATCH_SIZE]
-            batch_paths = [f["path"] for f in batch]
-
-            # Get presigned URLs
-            urls_response = self.get_upload_urls(recording_uid, session_uid, batch_paths)
-            url_map = {u.path: u for u in urls_response.urls}
-
-            # Upload in parallel
-            batch_confirmed: list[dict[str, Any]] = []
-
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = {}
-                for file_info in batch:
-                    path = file_info["path"]
-                    url_entry = url_map.get(path)
-                    if not url_entry:
-                        failed_count += 1
-                        logger.warning("No presigned URL returned for %s, skipping", path)
-                        continue
-                    local_path = source_path / path
-                    futures[pool.submit(self._upload_file, local_path, url_entry)] = file_info
-
-                for future in as_completed(futures):
-                    file_info = futures[future]
-                    try:
-                        etag = future.result()
-                        batch_confirmed.append(
-                            {
-                                "path": file_info["path"],
-                                "etag": etag,
-                                "size_bytes": file_info["size_bytes"],
-                            }
-                        )
-                        uploaded_bytes += file_info["size_bytes"]
-                    except Exception as exc:
-                        failed_count += 1
-                        logger.warning("Failed to upload %s: %s", file_info["path"], exc)
-
-            # Confirm batch with server
-            if batch_confirmed:
-                for confirm_start in range(0, len(batch_confirmed), _CONFIRM_BATCH_SIZE):
-                    confirm_batch = batch_confirmed[confirm_start : confirm_start + _CONFIRM_BATCH_SIZE]
-                    self.confirm_upload(recording_uid, session_uid, confirm_batch)
-
-                confirmed_set.update(f["path"] for f in batch_confirmed)
-                self._save_local_state(recording_uid, session_uid, source_path, confirmed_set, len(manifest))
-
-            # Progress callback
-            if on_progress:
-                on_progress(
-                    UploadProgress(
-                        total_files=len(manifest),
-                        uploaded_files=len(confirmed_set),
-                        total_bytes=sum(m["size_bytes"] for m in manifest),
-                        uploaded_bytes=uploaded_bytes,
-                        failed_files=failed_count,
-                    )
-                )
-
-        # Finalize if all confirmed
-        if failed_count == 0:
-            self.finalize_upload(recording_uid, session_uid)
-            self._cleanup_local_state(recording_uid)
-
-        # Return final session state
-        status = self.get_upload_status(recording_uid)
-        return UploadSession(
-            uid=session_uid,
-            total_files=status.total_files,
-            total_bytes=status.total_bytes,
-            confirmed_files=status.confirmed_files,
-            confirmed_bytes=status.confirmed_bytes,
-            s3_prefix=None,
-            status=status.status,
-        )
+        token = _QUIET_HTTP.set(True)
+        try:
+            return _UploadObserver(self, recording_uid, session_uid, source_dir, storage_config_uid, _STATE_DIR)
+        except UploadStateError:
+            raise
+        except Exception:
+            raise _failure("retained upload status could not be verified") from None
+        finally:
+            _QUIET_HTTP.reset(token)
 
     # -- Low-level API (thin wrappers around server endpoints) --
 
@@ -206,7 +133,7 @@ class FleetUploadManager(BaseSyncResource):
         if storage_config_uid:
             payload["storage_config_uid"] = storage_config_uid
         data = self._transport.request("POST", f"/fleet/recordings/{recording_uid}/upload/init/", json=payload)
-        return UploadSession.model_validate(data)
+        return UploadSession.model_validate(data, strict=True)
 
     def get_upload_urls(
         self, recording_uid: str, session_uid: str, file_paths: list[str], *, ttl_seconds: int = 3600
@@ -214,7 +141,7 @@ class FleetUploadManager(BaseSyncResource):
         """Get presigned PUT URLs for a batch of files."""
         payload = {"session_uid": session_uid, "file_paths": file_paths, "ttl_seconds": ttl_seconds}
         data = self._transport.request("POST", f"/fleet/recordings/{recording_uid}/upload/urls/", json=payload)
-        return UploadUrlsResponse.model_validate(data)
+        return UploadUrlsResponse.model_validate(data, strict=True)
 
     def confirm_upload(self, recording_uid: str, session_uid: str, files: list[dict[str, Any]]) -> dict[str, Any]:
         """Confirm files have been uploaded."""
@@ -231,72 +158,4 @@ class FleetUploadManager(BaseSyncResource):
     def get_upload_status(self, recording_uid: str) -> UploadStatusResponse:
         """Get current upload progress."""
         data = self._transport.request("GET", f"/fleet/recordings/{recording_uid}/upload/status/")
-        return UploadStatusResponse.model_validate(data)
-
-    # -- Internal helpers --
-
-    @staticmethod
-    def _upload_file(local_path: Path, url_entry: UploadUrlEntry) -> str:
-        """Upload a single file to S3 via presigned PUT URL. Returns the ETag."""
-        import httpx
-
-        _validate_presigned_put_url(url_entry.put_url)
-
-        headers = dict(url_entry.headers)
-        file_size = local_path.stat().st_size
-        headers["Content-Length"] = str(file_size)
-
-        for attempt in range(_MAX_RETRIES):
-            try:
-                with open(local_path, "rb") as f:
-                    resp = httpx.put(url_entry.put_url, content=f, headers=headers, timeout=300.0)
-                resp.raise_for_status()
-                etag: str = resp.headers.get("ETag", "")
-                return etag.strip('"')
-            except (httpx.HTTPStatusError, httpx.TransportError) as exc:
-                if attempt == _MAX_RETRIES - 1:
-                    raise
-                wait = 2**attempt
-                logger.debug("Retry %d for %s after %s (wait %ds)", attempt + 1, local_path.name, exc, wait)
-                time.sleep(wait)
-
-        raise RuntimeError(f"Upload failed after {_MAX_RETRIES} retries: {local_path}")
-
-    @staticmethod
-    def _load_local_state(recording_uid: str) -> dict[str, Any] | None:
-        """Load local upload state from disk."""
-        state_file = _STATE_DIR / f"{recording_uid}.json"
-        if not state_file.exists():
-            return None
-        try:
-            return json.loads(state_file.read_text())  # type: ignore[no-any-return]
-        except (json.JSONDecodeError, OSError):
-            return None
-
-    @staticmethod
-    def _save_local_state(
-        recording_uid: str,
-        session_uid: str,
-        source_dir: str | Path,
-        confirmed: set[str],
-        total_files: int,
-    ) -> None:
-        """Save local upload state to disk for crash recovery."""
-        _STATE_DIR.mkdir(parents=True, exist_ok=True)
-        state = {
-            "session_uid": session_uid,
-            "recording_uid": recording_uid,
-            "source_dir": str(source_dir),
-            "confirmed": sorted(confirmed),
-            "total_files": total_files,
-        }
-        state_file = _STATE_DIR / f"{recording_uid}.json"
-        tmp_file = state_file.with_suffix(".tmp")
-        tmp_file.write_text(json.dumps(state, indent=2))
-        tmp_file.replace(state_file)  # atomic on POSIX
-
-    @staticmethod
-    def _cleanup_local_state(recording_uid: str) -> None:
-        """Remove local state file after successful upload."""
-        state_file = _STATE_DIR / f"{recording_uid}.json"
-        state_file.unlink(missing_ok=True)
+        return UploadStatusResponse.model_validate(data, strict=True)

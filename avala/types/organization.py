@@ -12,9 +12,15 @@ class Organization(BaseModel):
     slug: str
     handle: Optional[str] = None
     description: Optional[str] = None
+    readme: Optional[str] = None
     logo: Optional[str] = None
     website: Optional[str] = None
     industry: Optional[str] = None
+    organization_type: Optional[str] = None
+    x_url: Optional[str] = None
+    hugging_face_url: Optional[str] = None
+    github_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     visibility: Optional[str] = None
@@ -44,6 +50,8 @@ class OrganizationMember(BaseModel):
     picture: Optional[str] = None
     role: Optional[str] = None
     created_at: Optional[datetime] = None
+    # Present only for organization managers; the server strips it otherwise.
+    last_active_at: Optional[datetime] = None
 
 
 class Invitation(BaseModel):

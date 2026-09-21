@@ -52,6 +52,10 @@ uploads must keep that isolation, or leftover state makes later runs skip files.
 
 ## Public dataset resolver
 
+- Resolver suites load `tests/fixtures/dataset_resolver_v1_fixtures.json` so they also run in
+  the standalone public mirror. Keep this copy byte-identical to the monorepo's canonical
+  `contracts/dataset_resolver_v1_fixtures.json`; the parity test checks it when present.
+  Only that parity check may skip outside the monorepo, never the substantive resolver suites.
 - Allocate the verified download spool before requesting an access grant. Signed URLs must not
   survive in exception contexts, traceback locals, response bodies, or parser frames.
 - Resolver requests are anonymously throttled. Sync and async transports must honor bounded

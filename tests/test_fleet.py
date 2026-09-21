@@ -874,7 +874,13 @@ def test_upload_recording_end_to_end(tmp_path, monkeypatch):
     respx.post(f"{base}/upload/init/").mock(
         return_value=httpx.Response(
             201,
-            json={"uid": "session-1", "total_files": 2, "total_bytes": 32, "status": "active"},
+            json={
+                "uid": "session-1",
+                "total_files": 2,
+                "total_bytes": 32,
+                "status": "initiated",
+                "s3_prefix": "fleet/org/device/rec-upload-1/",
+            },
         )
     )
     respx.post(f"{base}/upload/urls/").mock(
@@ -884,45 +890,55 @@ def test_upload_recording_end_to_end(tmp_path, monkeypatch):
                 "urls": [
                     {
                         "path": "a.txt",
-                        "put_url": "https://s3.us-west-2.amazonaws.com/bucket/a.txt",
-                        "s3_key": "bucket/a.txt",
+                        "put_url": "https://s3.us-west-2.amazonaws.com/bucket/fleet/org/device/rec-upload-1/a.txt",
+                        "s3_key": "fleet/org/device/rec-upload-1/a.txt",
                         "headers": {},
                     },
                     {
                         "path": "b.txt",
-                        "put_url": "https://s3.us-west-2.amazonaws.com/bucket/b.txt",
-                        "s3_key": "bucket/b.txt",
+                        "put_url": "https://s3.us-west-2.amazonaws.com/bucket/fleet/org/device/rec-upload-1/b.txt",
+                        "s3_key": "fleet/org/device/rec-upload-1/b.txt",
                         "headers": {},
                     },
                 ]
             },
         )
     )
-    respx.put("https://s3.us-west-2.amazonaws.com/bucket/a.txt").mock(
+    respx.put("https://s3.us-west-2.amazonaws.com/bucket/fleet/org/device/rec-upload-1/a.txt").mock(
         return_value=httpx.Response(200, headers={"ETag": '"etag-a"'})
     )
-    respx.put("https://s3.us-west-2.amazonaws.com/bucket/b.txt").mock(
+    respx.put("https://s3.us-west-2.amazonaws.com/bucket/fleet/org/device/rec-upload-1/b.txt").mock(
         return_value=httpx.Response(200, headers={"ETag": '"etag-b"'})
     )
     confirm_route = respx.post(f"{base}/upload/confirm/").mock(
-        return_value=httpx.Response(200, json={"confirmed": 2, "total_confirmed": 2, "total_files": 2})
-    )
-    finalize_route = respx.post(f"{base}/upload/finalize/").mock(
-        return_value=httpx.Response(200, json={"status": "finalized"})
-    )
-    respx.get(f"{base}/upload/status/").mock(
         return_value=httpx.Response(
             200,
             json={
                 "session_uid": "session-1",
-                "status": "completed",
-                "total_files": 2,
                 "confirmed_files": 2,
-                "total_bytes": 32,
+                "total_files": 2,
                 "confirmed_bytes": 32,
-                "pending_paths": [],
+                "total_bytes": 32,
             },
         )
+    )
+    finalize_route = respx.post(f"{base}/upload/finalize/").mock(
+        return_value=httpx.Response(202, json={"detail": "Finalization started.", "session_uid": "session-1"})
+    )
+    status_data = {
+        "session_uid": "session-1",
+        "total_files": 2,
+        "confirmed_files": 2,
+        "total_bytes": 32,
+        "confirmed_bytes": 32,
+        "pending_paths": [],
+    }
+    respx.get(f"{base}/upload/status/").mock(
+        side_effect=[
+            httpx.Response(404, json={"detail": "No upload session found for this recording."}),
+            httpx.Response(200, json={**status_data, "status": "uploading"}),
+            httpx.Response(200, json={**status_data, "status": "completed"}),
+        ]
     )
 
     client = Client(api_key="test-key")
@@ -938,7 +954,8 @@ def test_upload_recording_end_to_end(tmp_path, monkeypatch):
     assert session.confirmed_files == 2
     assert confirm_route.called
     assert finalize_route.called
-    # All files confirmed -> local state file cleaned up.
-    assert not (tmp_path / "state" / f"{rec}.json").exists()
+    # Completion retains the pinned receipt against a same-prefix restart.
+    receipt = next((tmp_path / "state" / "fleet-v1").glob("*.json"))
+    assert json.loads(receipt.read_text())["phase"] == "completed"
     assert progress_events and progress_events[-1].uploaded_files == 2
     client.close()

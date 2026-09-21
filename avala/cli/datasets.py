@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 import time
+import warnings
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping, TypedDict
 
 import click
+from rich.markup import escape
 
+from avala._config import DEFAULT_BASE_URL
 from avala.cli._output import human_bytes, print_detail, print_table
+from avala.errors import DatasetResolverError, MutableDatasetAliasWarning
 
 if TYPE_CHECKING:
+    from avala.datasets import ResolvedDataset
     from avala.types.dataset import Dataset
 
 
@@ -26,8 +31,93 @@ def _make_poll_callback(start_time: float) -> Callable[..., None]:
 
 
 @click.group()
-def datasets() -> None:
+@click.pass_context
+def datasets(ctx: click.Context) -> None:
     """Manage datasets."""
+    if ctx.invoked_subcommand != "resolve" and not ctx.resilient_parsing:
+        from avala.cli import _initialize_client
+
+        _initialize_client(ctx)
+
+
+class _ResolvedDatasetMetadata(TypedDict):
+    canonical_reference: str
+    requested_reference: str
+    display_reference: str
+    dataset_uid: str
+    revision_uid: str
+    revision_sha256: str
+    manifest_sha256: str
+    object_count: int
+    total_size_bytes: int
+    rights: Mapping[str, Any]
+
+
+def _resolution_metadata(dataset: ResolvedDataset) -> _ResolvedDatasetMetadata:
+    # Resolver envelopes allow extensions. Copy only public properties so future
+    # server fields cannot silently become part of the CLI handoff contract.
+    return {
+        "canonical_reference": dataset.canonical_reference,
+        "requested_reference": dataset.requested_reference,
+        "display_reference": dataset.display_reference,
+        "dataset_uid": dataset.dataset_uid,
+        "revision_uid": dataset.revision_uid,
+        "revision_sha256": dataset.revision_sha256,
+        "manifest_sha256": dataset.manifest_sha256,
+        "object_count": dataset.object_count,
+        "total_size_bytes": dataset.total_size_bytes,
+        "rights": dataset.rights,
+    }
+
+
+@datasets.command("resolve")
+@click.argument("reference")
+@click.option("--revision", default=None, help="Revision alias or digest; omit when REFERENCE already contains one")
+@click.pass_context
+def resolve_dataset(ctx: click.Context, reference: str, revision: str | None) -> None:
+    """Resolve public dataset metadata to an immutable reference without an API key.
+
+    Use the returned canonical_reference for reproducible inputs. No object
+    listings, access grants, or object downloads are requested.
+    """
+    from avala import load
+
+    try:
+        with warnings.catch_warnings():
+            # This command turns a mutable alias into a pinned handoff. The
+            # library warning is redundant here and must not pollute CLI output.
+            warnings.simplefilter("ignore", MutableDatasetAliasWarning)
+            with load(reference, revision=revision, base_url=ctx.obj.get("base_url") or DEFAULT_BASE_URL) as dataset:
+                metadata = _resolution_metadata(dataset)
+    except DatasetResolverError as exc:
+        raise click.ClickException(exc.message) from None
+
+    if ctx.obj.get("output_format") == "json":
+        # Keep counts as JSON integers and rights as an object; detail-table
+        # values are formatted strings and are not the machine-readable schema.
+        click.echo(json.dumps(metadata, indent=2))
+        return
+
+    print_detail(
+        "Public dataset revision",
+        [
+            ("Canonical reference", metadata["canonical_reference"]),
+            ("Requested reference", metadata["requested_reference"]),
+            ("Display reference", metadata["display_reference"]),
+            ("Dataset UID", metadata["dataset_uid"]),
+            ("Revision UID", metadata["revision_uid"]),
+            ("Revision SHA-256", metadata["revision_sha256"]),
+            ("Manifest SHA-256", metadata["manifest_sha256"]),
+            ("Objects", str(metadata["object_count"])),
+            ("Total size", human_bytes(metadata["total_size_bytes"])),
+            ("Rights status", str(metadata["rights"]["status"])),
+            ("Rights access", str(metadata["rights"]["access"])),
+            ("Rights name", escape(str(metadata["rights"]["name"]))),
+            ("Rights URL", escape(str(metadata["rights"]["url"]))),
+            ("Rights document SHA-256", str(metadata["rights"]["document_sha256"])),
+            ("Rights attestation SHA-256", str(metadata["rights"]["attestation_sha256"])),
+        ],
+    )
 
 
 @datasets.command("list")
@@ -48,7 +138,7 @@ def datasets() -> None:
     "--visibility",
     type=str,
     default=None,
-    help="Filter by visibility (private, public)",
+    help="Filter authorized workspace datasets by visibility (private, unlisted, public)",
 )
 @click.option("--limit", type=int, default=None, help="Maximum number of results")
 @click.pass_context
@@ -317,7 +407,7 @@ def health_cmd(ctx: click.Context, owner: str, slug: str) -> None:
 @click.option(
     "--visibility",
     default="private",
-    type=click.Choice(["private", "public"]),
+    type=click.Choice(["private", "public", "unlisted"]),
     help="Dataset visibility (default: private)",
 )
 @click.option(
@@ -599,6 +689,9 @@ def upload_dataset(
     # rename-mid-upload hole survived its first fix.
     storage_root_before = client.datasets.resolve_storage_root(organization_uid)
 
+    dataset_upload_uid = client.datasets.prepare_manual_upload_batch(
+        name, organization_uid=organization_uid, resume=resume
+    )
     start_time = time.monotonic()
     try:
         uploaded_bytes = client.datasets.upload_files(
@@ -617,6 +710,7 @@ def upload_dataset(
             # Keep the checkpoint until the dataset is created below, so a
             # failure at that last step resumes instead of re-sending everything.
             clear_state_on_success=False,
+            dataset_upload_uid=dataset_upload_uid,
         )
     except QuotaExceededError as exc:
         detail = ""
@@ -661,6 +755,7 @@ def upload_dataset(
         industry=industry,
         license=license_id,
         organization_uid=organization_uid,
+        dataset_upload_uid=dataset_upload_uid,
     )
     # Dataset exists — the resume checkpoint has nothing left to protect.
     # Must match the fingerprint `upload_files` keyed this run's state by, or
@@ -671,6 +766,7 @@ def upload_dataset(
         _STATE_DIR,
         name,
         fingerprint=client.datasets._upload_fingerprint(organization_uid, name),
+        expected_batch=dataset_upload_uid,
     )
     click.echo(f"Dataset created: {dataset.uid} ({dataset.name})", err=True)
 

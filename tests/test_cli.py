@@ -5,6 +5,8 @@ import pytest
 pytest.importorskip("click", reason="CLI dependencies not installed (pip install avala[cli])")
 
 import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Optional  # noqa: E402
 
 import httpx  # noqa: E402
 import respx  # noqa: E402
@@ -121,6 +123,11 @@ def test_datasets_upload_passes_organization_uid_end_to_end():
     assert result.exit_code == 0, result.output
     assert json.loads(presign.calls[0].request.content)["organization_uid"] == org
     assert json.loads(create.calls[0].request.content)["organization_uid"] == org
+    assert json.loads(presign.calls[0].request.content)["upload_protocol_version"] == 2
+    assert (
+        json.loads(presign.calls[0].request.content)["dataset_upload_uid"]
+        == json.loads(create.calls[0].request.content)["dataset_upload_uid"]
+    )
 
 
 def test_datasets_upload_rejects_legacy_storage_config():
@@ -387,7 +394,8 @@ def test_tasks_list():
 
 
 @respx.mock
-def test_datasets_create():
+@pytest.mark.parametrize("visibility", [None, "private", "public", "unlisted"])
+def test_datasets_create(visibility: Optional[str]) -> None:
     respx.post("https://api.avala.ai/api/v1/datasets/").mock(
         return_value=httpx.Response(
             201,
@@ -414,11 +422,26 @@ def test_datasets_create():
             "new-dataset",
             "--data-type",
             "lidar",
-        ],
+        ]
+        + (["--visibility", visibility] if visibility is not None else []),
     )
     assert result.exit_code == 0
     assert "new-ds-uid" in result.output
     assert "New Dataset" in result.output
+    assert json.loads(respx.calls.last.request.content)["visibility"] == (visibility or "private")
+
+
+@respx.mock
+def test_manual_upload_rejects_unlisted_without_network(tmp_path: Path) -> None:
+    source = tmp_path / "frame.jpg"
+    source.write_bytes(b"image")
+    result = CliRunner().invoke(
+        main,
+        ["--api-key", "test-key", "datasets", "upload", str(source), "--visibility", "unlisted"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid value for '--visibility'" in result.output
+    assert not respx.calls
 
 
 @respx.mock
@@ -964,3 +987,56 @@ def test_storage_configs_create_drops_credentials_the_config_cannot_use():
     assert "s3_access_key_id" not in body and "s3_secret_access_key" not in body
     assert "gc_storage_auth_json_content" not in body
     assert "private_key" not in route.calls.last.request.content.decode()
+
+
+@respx.mock
+@pytest.mark.parametrize("resume", [True, False])
+def test_cli_resumes_sdk_managed_batch_without_reuploading(tmp_path, resume):
+    from avala import Client
+    from avala.errors import ServerError
+
+    base = "https://api.avala.ai/api/v1"
+    source = tmp_path / "frame.jpg"
+    source.write_bytes(b"image")
+    uid = "11111111-1111-4111-8111-111111111111"
+    url = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/b/key"
+    respx.get(f"{base}/datasets/manual-upload/quota/").mock(
+        return_value=httpx.Response(200, json={"used": 0, "limit": 100000})
+    )
+    presign = respx.post(f"{base}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200, json={"method": "PUT", "upload_uid": uid, "object_key": "b/key", "url": url, "headers": {}}
+        )
+    )
+    put = respx.put(url).mock(return_value=httpx.Response(200))
+    respx.post(f"{base}/datasets/manual-upload/uploads/{uid}/complete/").mock(return_value=httpx.Response(200, json={}))
+    finalize = respx.post(f"{base}/datasets/manual-upload/").mock(
+        return_value=httpx.Response(500, json={"detail": "retry finalization"})
+    )
+    with Client(api_key="test-key") as client, pytest.raises(ServerError):
+        client.datasets.create_from_local(source=str(source), name="N", slug="n", data_type="image")
+    batch = json.loads(presign.calls.last.request.content)["dataset_upload_uid"]
+    finalize.mock(return_value=httpx.Response(201, json={"uid": "d1", "name": "N", "slug": "n", "data_type": "image"}))
+    result = CliRunner().invoke(
+        main,
+        [
+            "--api-key",
+            "test-key",
+            "datasets",
+            "upload",
+            "--source",
+            str(source),
+            "--name",
+            "N",
+            "--slug",
+            "n",
+            "--data-type",
+            "image",
+            *([] if resume else ["--no-resume"]),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert put.call_count == (1 if resume else 2)
+    assert presign.call_count == (1 if resume else 2)
+    final_batch = json.loads(finalize.calls.last.request.content)["dataset_upload_uid"]
+    assert (final_batch == batch) is resume

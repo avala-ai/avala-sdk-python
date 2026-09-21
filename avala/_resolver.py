@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, BinaryIO, Literal, Mapping, Optional, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 from pydantic import (
@@ -49,9 +49,14 @@ _FRIENDLY_REFERENCE_RE = re.compile(
 _SELECTOR_RE = re.compile(rf"^{_SELECTOR_PATTERN}$")
 _ASCII_DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 _REGION_RE = re.compile(r"^(?!us-gov-)[a-z]{2}(?:-[a-z0-9]+)+-[0-9]$")
-_R2_HOST_RE = re.compile(r"^[0-9a-f]{32}\.r2\.cloudflarestorage\.com$")
+_R2_HOST_RE = re.compile(r"^[0-9a-f]{32}(?:\.eu)?\.r2\.cloudflarestorage\.com$")
 _AZURE_HOST_RE = re.compile(r"^[a-z0-9]{3,24}\.blob\.core\.windows\.net$")
-_PROVIDERS = frozenset({"aws_s3", "gcs", "azure_blob", "cloudflare_r2", "avala_proxy"})
+_PROVIDERS = frozenset({"aws_s3", "gcs", "azure_blob", "cloudflare_r2", "avala_proxy", "avala_edge"})
+_EDGE_HOSTS_BY_API_BASE = {
+    "https://api.avala.ai/api/v1": "data.avala.ai",
+    "https://server.avala.ai/api/v1": "data.avala.ai",
+    "https://server.dev.alala.ai/api/v1": "data-development.avala.ai",
+}
 _MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
 _MAX_GRANT_TTL_SECONDS = 300
 _LOCAL_CLOCK_SKEW_SECONDS = 30
@@ -384,6 +389,11 @@ def is_provider_hostname_allowed(
         return _AZURE_HOST_RE.fullmatch(ascii_hostname) is not None
     if provider == "cloudflare_r2":
         return _R2_HOST_RE.fullmatch(ascii_hostname) is not None
+    if provider == "avala_edge":
+        return any(
+            ascii_hostname == edge_host and _ascii_hostname(api_root_hostname) == urlsplit(api_base).hostname
+            for api_base, edge_host in _EDGE_HOSTS_BY_API_BASE.items()
+        )
     if provider == "avala_proxy":
         return ascii_hostname == _ascii_hostname(api_root_hostname)
     return False
@@ -419,6 +429,34 @@ def _validate_provider_url(url: str, provider: str, base_url: str) -> None:
             or any(segment in {".", ".."} for segment in parsed.path.split("/"))
         ):
             raise DatasetIntegrityError("untrusted_download_path")
+
+
+def _validate_edge_grant_url(
+    url: str,
+    revision: ResolvedRevisionDocument,
+    manifest_object: ManifestObjectDocument,
+    base_url: str,
+) -> None:
+    parsed = urlsplit(url)
+    expected_prefix = (
+        f"/v1/datasets/{revision.dataset_uid}/{revision.revision_sha256}/{revision.manifest.sha256}"
+        f"/objects/{manifest_object.object_uid}/"
+    )
+    if (
+        parsed.netloc != _EDGE_HOSTS_BY_API_BASE.get(base_url)
+        or not parsed.path.startswith(expected_prefix)
+        or re.fullmatch(r"[0-9a-f]{64}", parsed.path[len(expected_prefix) :]) is None
+        or "#" in url
+    ):
+        raise DatasetIntegrityError("access_grant_identity_mismatch")
+    if not parsed.query.startswith("grant=") or "&" in parsed.query or len(parsed.query) > 6 + 3 * 4096:
+        raise DatasetIntegrityError("invalid_access_grant_url")
+    query = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True, max_num_fields=1)
+    if len(query) != 1 or query[0][0] != "grant" or re.fullmatch(r"[A-Za-z0-9_.:-]{1,4096}", query[0][1]) is None:
+        raise DatasetIntegrityError("invalid_access_grant_url")
+    # The edge verifies the signed evidence digest against retained storage
+    # proof. The SDK independently binds the resolved identities above and
+    # verifies the manifest's full size and SHA-256 after streaming the bytes.
 
 
 def _parse_model(model: type[_ResolverModel], data: Mapping[str, Any], reason: str) -> _ResolverModel:
@@ -610,6 +648,8 @@ def _parse_access_grant(
     local_remaining = lifetime - max(0.0, response_age)
     remaining_at_receipt = min(lifetime, local_remaining)
     _validate_provider_url(url, provider, base_url)
+    if provider == "avala_edge":
+        _validate_edge_grant_url(url, revision, manifest_object, base_url)
     return DatasetAccessGrant(
         provider=provider,
         url=url,
@@ -705,6 +745,7 @@ class SyncDatasetResolverTransport:
         self,
         path: str,
         *,
+        method: Literal["GET", "POST"] = "GET",
         params: Mapping[str, Any] | None = None,
         expected_dataset_uid: str | None = None,
         expected_revision_sha256: str | None = None,
@@ -713,13 +754,24 @@ class SyncDatasetResolverTransport:
         for rate_limit_attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
             response: httpx.Response | None = None
             try:
-                response = self._client.get(url, params=params)
+                response = self._client.request(method, url, params=params)
             except httpx.HTTPError:
                 pass
             if response is None:
                 # Raise after leaving the httpx exception context: a partial JSON
                 # body can already contain a signed URL retained by stream frames.
                 raise DatasetResolverError("transport_error") from None
+            if method == "POST" and response.status_code == 405:
+                # Older servers expose only GET on this same authorized grant
+                # resource. Never fall back for denials, outages or redirects.
+                # Discard the body before recursion/any later exception.
+                del response
+                return self._request(
+                    path,
+                    params=params,
+                    expected_dataset_uid=expected_dataset_uid,
+                    expected_revision_sha256=expected_revision_sha256,
+                )
             data, unexpected_decode_error = _decode_resolver_json(response)
             if unexpected_decode_error:
                 del data
@@ -837,9 +889,13 @@ class SyncDatasetResolverTransport:
         self,
         revision: ResolvedRevisionDocument,
         manifest_object: ManifestObjectDocument,
+        *,
+        explicit_download: bool = False,
     ) -> DatasetAccessGrant:
         response, data = self._request(
             manifest_object.access_path,
+            method="POST" if explicit_download else "GET",
+            params={"transport": "avala-edge-v1"},
             expected_dataset_uid=revision.dataset_uid,
             expected_revision_sha256=revision.revision_sha256,
         )
