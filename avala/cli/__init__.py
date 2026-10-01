@@ -126,6 +126,7 @@ from avala.cli.inference_providers import inference_providers  # noqa: E402
 from avala.cli.lerobot import lerobot  # noqa: E402
 from avala.cli.projects import projects  # noqa: E402
 from avala.cli.quality_targets import quality_targets  # noqa: E402
+from avala.cli.sequence_outcomes import sequence_outcomes  # noqa: E402
 from avala.cli.shell_completion import shell_completion  # noqa: E402
 from avala.cli.status import status  # noqa: E402
 from avala.cli.storage_configs import storage_configs  # noqa: E402
@@ -146,6 +147,7 @@ main.add_command(inference_providers)
 main.add_command(lerobot)
 main.add_command(projects)
 main.add_command(quality_targets)
+main.add_command(sequence_outcomes)
 main.add_command(shell_completion)
 main.add_command(status)
 main.add_command(storage_configs)

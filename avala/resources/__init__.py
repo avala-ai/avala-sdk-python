@@ -11,6 +11,7 @@ from avala.resources.inference_providers import AsyncInferenceProviders, Inferen
 from avala.resources.organizations import AsyncOrganizations, Organizations
 from avala.resources.projects import AsyncProjects, Projects
 from avala.resources.quality_targets import AsyncQualityTargets, QualityTargets
+from avala.resources.sequence_outcomes import AsyncSequenceOutcomes, SequenceOutcomes
 from avala.resources.slices import AsyncSlices, Slices
 from avala.resources.storage_configs import AsyncStorageConfigs, StorageConfigs
 from avala.resources.tasks import AsyncTasks, Tasks
@@ -39,6 +40,8 @@ __all__ = [
     "AsyncProjects",
     "QualityTargets",
     "AsyncQualityTargets",
+    "SequenceOutcomes",
+    "AsyncSequenceOutcomes",
     "Slices",
     "AsyncSlices",
     "StorageConfigs",

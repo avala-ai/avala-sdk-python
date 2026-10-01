@@ -16,6 +16,7 @@ from avala.resources.inference_providers import InferenceProviders
 from avala.resources.organizations import Organizations
 from avala.resources.projects import Projects
 from avala.resources.quality_targets import QualityTargets
+from avala.resources.sequence_outcomes import SequenceOutcomes
 from avala.resources.slices import Slices
 from avala.resources.storage_configs import StorageConfigs
 from avala.resources.tasks import Tasks
@@ -52,6 +53,7 @@ class Client:
         self.organizations = Organizations(self._transport)
         self.projects = Projects(self._transport)
         self.quality_targets = QualityTargets(self._transport)
+        self.sequence_outcomes = SequenceOutcomes(self._transport)
         self.slices = Slices(self._transport)
         self.storage_configs = StorageConfigs(self._transport)
         self.tasks = Tasks(self._transport)

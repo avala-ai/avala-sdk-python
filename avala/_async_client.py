@@ -19,6 +19,7 @@ from avala.resources.inference_providers import AsyncInferenceProviders
 from avala.resources.organizations import AsyncOrganizations
 from avala.resources.projects import AsyncProjects
 from avala.resources.quality_targets import AsyncQualityTargets
+from avala.resources.sequence_outcomes import AsyncSequenceOutcomes
 from avala.resources.slices import AsyncSlices
 from avala.resources.storage_configs import AsyncStorageConfigs
 from avala.resources.tasks import AsyncTasks
@@ -55,6 +56,7 @@ class AsyncClient:
         self.organizations = AsyncOrganizations(self._transport)
         self.projects = AsyncProjects(self._transport)
         self.quality_targets = AsyncQualityTargets(self._transport)
+        self.sequence_outcomes = AsyncSequenceOutcomes(self._transport)
         self.slices = AsyncSlices(self._transport)
         self.storage_configs = AsyncStorageConfigs(self._transport)
         self.tasks = AsyncTasks(self._transport)

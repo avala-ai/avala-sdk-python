@@ -23,6 +23,7 @@ import pytest
 from avala.types.annotation_issue import AnnotationIssue, AnnotationIssueMetrics, AnnotationIssueToolDetail
 from avala.types.dataset import DatasetHealth, DatasetItem, DatasetSequence
 from avala.types.organization import Invitation, Organization, OrganizationMember, Team, TeamMember
+from avala.types.sequence_outcome import SequenceOutcome
 from avala.types.slice import Slice, SliceItem
 
 # ── Load contract ───────────────────────────────────────────────
@@ -61,6 +62,7 @@ SDK_TYPE_MAP = {
     "AnnotationIssue": AnnotationIssue,
     "AnnotationIssueMetrics": AnnotationIssueMetrics,
     "AnnotationIssueToolDetail": AnnotationIssueToolDetail,
+    "SequenceOutcome": SequenceOutcome,
 }
 
 
@@ -83,6 +85,7 @@ def _build_response_shape_map() -> None:
     from avala.resources.annotation_issues import AnnotationIssues
     from avala.resources.datasets import Datasets
     from avala.resources.organizations import Organizations
+    from avala.resources.sequence_outcomes import SequenceOutcomes
     from avala.resources.slices import Slices
 
     resource_map = {
@@ -90,6 +93,7 @@ def _build_response_shape_map() -> None:
         "slices": Slices,
         "datasets": Datasets,
         "annotation_issues": AnnotationIssues,
+        "sequence_outcomes": SequenceOutcomes,
     }
 
     for resource_name, resource_cls in resource_map.items():
@@ -146,6 +150,7 @@ class TestSDKTypesCoverContractFields:
             "AnnotationIssue",
             "AnnotationIssueMetrics",
             "AnnotationIssueToolDetail",
+            "SequenceOutcome",
         ],
     )
     def test_sdk_type_covers_all_serializer_fields(self, contract: Dict[str, Any], type_name: str) -> None:
@@ -177,6 +182,7 @@ class TestSDKTypesCoverContractFields:
             "AnnotationIssue",
             "AnnotationIssueMetrics",
             "AnnotationIssueToolDetail",
+            "SequenceOutcome",
         ],
     )
     def test_sdk_type_exact_match_for_flat_types(self, contract: Dict[str, Any], type_name: str) -> None:
@@ -216,6 +222,8 @@ class TestResponseShapesMatchContract:
             "annotation_issues.list_by_sequence",
             "annotation_issues.list_by_dataset",
             "annotation_issues.list_tools",
+            "sequence_outcomes.list",
+            "sequence_outcomes.history",
         ],
     )
     def test_list_endpoint_uses_correct_transport(self, contract: Dict[str, Any], endpoint_key: str) -> None:

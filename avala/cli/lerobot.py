@@ -59,6 +59,12 @@ def lerobot() -> None:
     default=None,
     help="License for the pushed dataset card (default: lerobot's apache-2.0)",
 )
+@click.option(
+    "--include-outcomes",
+    is_flag=True,
+    default=False,
+    help="Write each episode's Avala sequence outcome label to meta/avala_sequence_outcomes.jsonl",
+)
 @click.pass_context
 def export_cmd(
     ctx: click.Context,
@@ -77,6 +83,7 @@ def export_cmd(
     push: bool,
     tags: tuple[str, ...],
     repo_license: str | None,
+    include_outcomes: bool,
 ) -> None:
     """Convert an Avala sequence dataset (DATASET = OWNER/SLUG) to a LeRobot v3 dataset.
 
@@ -110,5 +117,6 @@ def export_cmd(
         push=push,
         tags=list(tags) or None,
         repo_license=repo_license,
+        include_outcomes=include_outcomes,
     )
     click.echo(f"LeRobot dataset written to {out}")

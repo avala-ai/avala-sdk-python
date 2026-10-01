@@ -22,6 +22,13 @@ and ``action`` are emitted **only** when an explicit ``state_key``/``action_key`
 resolves to a numeric vector inside the raw frame dict (or, opt-in, the camera-rig
 ego pose) — they are never fabricated as zeros.
 
+**Outcome labels.** With ``include_outcomes=True`` each sequence's current outcome
+label (``client.sequence_outcomes``) is written to
+``meta/avala_sequence_outcomes.jsonl``, one JSON object per saved episode keyed by
+LeRobot ``episode_index`` (Avala sequence → LeRobot episode). LeRobot's own
+episode table has no slot for arbitrary per-episode metadata, so this is a
+sidecar next to it. Unlabeled sequences get ``"outcome": null``.
+
 Requires the optional ``lerobot`` extra (Python 3.12+)::
 
     pip install "avala[lerobot]"
@@ -41,6 +48,7 @@ Example::
 from __future__ import annotations
 
 import io
+import json
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
@@ -50,6 +58,7 @@ import httpx
 if TYPE_CHECKING:
     from avala._client import Client
     from avala.types.dataset import DatasetSequence
+    from avala.types.sequence_outcome import SequenceOutcome
 
 __all__ = [
     "export_dataset",
@@ -57,7 +66,12 @@ __all__ = [
     "iter_frames",
     "convert_sequence",
     "discover_camera_specs",
+    "outcome_episode_metadata",
+    "OUTCOMES_SIDECAR",
 ]
+
+# Relative to the LeRobot dataset root, beside lerobot's own ``meta/`` files.
+OUTCOMES_SIDECAR = "meta/avala_sequence_outcomes.jsonl"
 
 _MEDIA_TIMEOUT = 30.0
 _IMG_PREFIX = "observation.images."
@@ -365,6 +379,52 @@ def convert_sequence(
     return count
 
 
+def outcome_episode_metadata(
+    episode_index: int, sequence_uid: str, outcome: "Optional[SequenceOutcome]"
+) -> Dict[str, Any]:
+    """Map one Avala sequence's outcome label onto its LeRobot episode (one sidecar row)."""
+    row: Dict[str, Any] = {"episode_index": episode_index, "avala_sequence_uid": sequence_uid, "outcome": None}
+    if outcome is None:
+        return row
+    row.update(
+        {
+            "outcome": outcome.outcome,
+            "outcome_version": outcome.version,
+            "progress": outcome.progress,
+            "quality": outcome.quality,
+            "speed": outcome.speed,
+            "subtasks": [subtask.model_dump() for subtask in outcome.subtasks],
+            "mistake_type": outcome.mistake_type or None,
+            "recovery_type": outcome.recovery_type or None,
+            "failure_stage": outcome.failure_stage or None,
+            "autonomy_level": outcome.autonomy_level or None,
+            "model_version": outcome.model_version or None,
+            "evaluation_membership": outcome.evaluation_membership or None,
+            "leakage_groups": dict(outcome.leakage_groups),
+            "outcome_source": outcome.source,
+            "outcome_confidence": outcome.confidence,
+        }
+    )
+    return row
+
+
+def _current_outcome(client: "Client", owner: str, slug: str, sequence_uid: str) -> "Optional[SequenceOutcome]":
+    from avala.errors import NotFoundError
+
+    try:
+        return client.sequence_outcomes.get(owner, slug, sequence_uid)
+    except NotFoundError:
+        return None
+
+
+def _write_outcomes_sidecar(root: Path, rows: List[Dict[str, Any]]) -> None:
+    path = root / OUTCOMES_SIDECAR
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
 def _list_sequences(client: "Client", owner: str, slug: str, limit: Optional[int]) -> List[Any]:
     out: List[Any] = []
     cursor: Optional[str] = None
@@ -398,6 +458,7 @@ def export_dataset(
     push: bool = False,
     tags: Optional[List[str]] = None,
     repo_license: Optional[str] = None,
+    include_outcomes: bool = False,
 ) -> Path:
     """Convert an Avala sequence dataset to a LeRobot v3 dataset on disk.
 
@@ -406,6 +467,8 @@ def export_dataset(
     default to avoid accidental publication. ``tags`` are appended to the dataset
     card (lerobot always adds ``LeRobot``/``robotics``; we always add ``avala``);
     ``repo_license`` overrides lerobot's default card license.
+    ``include_outcomes=True`` writes each episode's Avala outcome label to
+    ``meta/avala_sequence_outcomes.jsonl`` (see the module docstring).
     """
     if state_key and include_ego_pose:
         raise ValueError("use either state_key or include_ego_pose, not both (both map to observation.state)")
@@ -423,6 +486,7 @@ def export_dataset(
 
     media_client = httpx.Client(timeout=_MEDIA_TIMEOUT)
     ds = None
+    outcome_rows: List[Dict[str, Any]] = []
     try:
         # Derive the schema from the first NON-empty sequence (an empty leading
         # sequence must not block an otherwise-valid dataset). Frames are embedded
@@ -467,7 +531,7 @@ def export_dataset(
             if not _frames(full):
                 warnings.warn(f"sequence {seq_meta.uid} has no frames; skipping", stacklevel=2)
                 continue
-            convert_sequence(
+            written = convert_sequence(
                 ds,
                 full,
                 media_client=media_client,
@@ -477,6 +541,10 @@ def export_dataset(
                 include_ego_pose=include_ego_pose,
                 task=task,
             )
+            if include_outcomes and written:
+                # episode_index is lerobot's 0-based save order, which is ours.
+                outcome = _current_outcome(client, owner, slug, seq_meta.uid)
+                outcome_rows.append(outcome_episode_metadata(len(outcome_rows), seq_meta.uid, outcome))
     except Exception:
         # Footer whatever episodes were already saved so a mid-batch failure does
         # not leave an unreadable (un-finalized) dataset; never mask the real error.
@@ -492,6 +560,9 @@ def export_dataset(
         ds.finalize()
     finally:
         media_client.close()
+
+    if include_outcomes:
+        _write_outcomes_sidecar(out, outcome_rows)
 
     if push:
         push_kwargs: Dict[str, Any] = {"tags": ["avala", *(tags or [])]}

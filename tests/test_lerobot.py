@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 from typing import Any
 
@@ -382,3 +383,76 @@ def test_actionable_error_when_lerobot_missing():
         pytest.skip("lerobot is installed; cannot test the missing-dependency path")
     with pytest.raises(ModuleNotFoundError, match=r"avala\[lerobot\]"):
         al._lerobot_dataset_cls()
+
+
+def _outcome_json(sequence_uid: str, **overrides):
+    body = {
+        "uid": f"o-{sequence_uid}",
+        "sequence_uid": sequence_uid,
+        "version": 3,
+        "is_current": True,
+        "outcome": "mistake_and_recovery",
+        "progress": 0.5,
+        "quality": None,
+        "speed": None,
+        "subtasks": [{"label": "regrasp", "start_ts": 1.0, "end_ts": 2.0, "outcome": None}],
+        "mistake_type": "grasp_slip",
+        "recovery_type": "",
+        "failure_stage": "",
+        "autonomy_level": "teleoperation",
+        "model_version": "",
+        "evaluation_membership": "held_out_eval",
+        "leakage_groups": {"location": "kitchen-3"},
+        "source": "human",
+        "labeled_by": None,
+        "confidence": None,
+    }
+    body.update(overrides)
+    return body
+
+
+@respx.mock
+def test_export_dataset_writes_outcome_sidecar_per_episode(monkeypatch, tmp_path):
+    """Avala sequence -> LeRobot episode: one sidecar row per SAVED episode, in save order."""
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    full = _sequence(uid="seqX", n=1, n_cams=1).model_dump(mode="json")
+    _wire_seq_routes(["seq1", "seq2"], lambda *_: httpx.Response(200, json=full))
+    respx.get(f"{BASE_URL}/datasets/o/s/sequences/seq1/outcome/").mock(
+        return_value=httpx.Response(200, json=_outcome_json("seq1"))
+    )
+    respx.get(f"{BASE_URL}/datasets/o/s/sequences/seq2/outcome/").mock(
+        return_value=httpx.Response(404, json={"detail": "This sequence has no outcome label."})
+    )
+
+    client = Client(api_key="test-key")
+    export_dataset(client, "o", "s", repo_id="user/ds", output_dir=tmp_path, fps=30, include_outcomes=True)
+    client.close()
+
+    rows = [json.loads(line) for line in (tmp_path / al.OUTCOMES_SIDECAR).read_text().splitlines()]
+    assert [(r["episode_index"], r["avala_sequence_uid"]) for r in rows] == [(0, "seq1"), (1, "seq2")]
+    assert rows[0]["outcome"] == "mistake_and_recovery"
+    assert rows[0]["evaluation_membership"] == "held_out_eval"
+    assert rows[0]["recovery_type"] is None  # empty strings map to null
+    assert rows[0]["subtasks"][0]["label"] == "regrasp"
+    assert rows[1] == {"episode_index": 1, "avala_sequence_uid": "seq2", "outcome": None}
+
+
+@respx.mock
+def test_export_dataset_skips_outcomes_unless_requested(monkeypatch, tmp_path):
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    full = _sequence(uid="seqX", n=1, n_cams=1).model_dump(mode="json")
+    _wire_seq_routes(["seq1"], lambda *_: httpx.Response(200, json=full))
+    outcome_route = respx.get(f"{BASE_URL}/datasets/o/s/sequences/seq1/outcome/").mock(
+        return_value=httpx.Response(200, json=_outcome_json("seq1"))
+    )
+
+    client = Client(api_key="test-key")
+    export_dataset(client, "o", "s", repo_id="user/ds", output_dir=tmp_path, fps=30)
+    client.close()
+
+    assert not outcome_route.called
+    assert not (tmp_path / al.OUTCOMES_SIDECAR).exists()
