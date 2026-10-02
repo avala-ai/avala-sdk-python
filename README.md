@@ -260,7 +260,8 @@ Turn each trial of an [Inspect Robots](https://github.com/robocurve/inspect-robo
 run into an outcome-labelled sequence. Successes map to `expert_success` or `partial_success`
 by a configurable score threshold, failures to `failure`, and errored or cancelled trials to
 `aborted`. Labels are written with `source=imported` and `evaluation_membership=held_out_eval`,
-and `model_version` comes from the run's policy. Requires `pip install 'avala[inspect]'`
+and `model_version` comes from the run's policy. Each label stores the run id, task, trial,
+epoch, scene and log file name in its `source_metadata`. Requires `pip install 'avala[inspect]'`
 (Python 3.10+).
 
 ```bash

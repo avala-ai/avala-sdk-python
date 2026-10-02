@@ -43,11 +43,13 @@ value (scorer failed / non-finite)
 ``progress_key`` score in [0, 1]            ``progress`` (only when requested)
 ==========================================  ==========================================
 
-The run id, task, scene, epoch, scores and termination reason of every trial are kept in
-the row's ``metadata``. ``SequenceOutcome`` has no free-form metadata field on the server
-today, so that metadata is written into the trial's MCAP (``/inspect_robots/trial`` topic)
-when the importer creates sequences, into the optional JSON receipt, and shown by
-``--dry-run``; it is not sent with the outcome label.
+Every label carries its run provenance in ``source_metadata`` (see
+:meth:`TrialMapping.source_metadata`): ``importer``, ``importer_version``, ``run_id``,
+``task``, ``trial_id``, ``log_file`` (the log's file name, never a local path), ``epoch``
+and ``scene``. The fuller per-trial record (scores, termination reason, operator
+judgement, ...) is the row's ``metadata``; it is too large and too nested for the label,
+so it goes into the trial's MCAP (``/inspect_robots/trial`` topic) when the importer
+creates sequences, into the optional JSON receipt, and is shown by ``--dry-run``.
 
 Sequences are matched or created in one of two ways:
 
@@ -71,8 +73,9 @@ import math
 import re
 import zlib
 from dataclasses import dataclass, field, replace
+from importlib.metadata import PackageNotFoundError, version as _package_version
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
 if TYPE_CHECKING:
     from avala._client import Client
@@ -94,11 +97,53 @@ DEFAULT_SUCCESS_KEYS: Tuple[str, ...] = ("success_at_end", "reached_goal_state",
 _INSTALL_HINT = "Importing Inspect Robots logs requires the 'inspect' extra: pip install 'avala[inspect]'"
 _MAX_MODEL_VERSION = 255  # SequenceOutcome.model_version max_length on the server
 _MAX_SUBTASK_LABEL = 500  # SequenceOutcomeSubtask.label max_length on the server
+# SequenceOutcome.source_metadata limits on the server (``sequence_outcome_serializers.py``).
+_MAX_SOURCE_METADATA_KEYS = 20
+_MAX_SOURCE_METADATA_KEY = 64
+_MAX_SOURCE_METADATA_VALUE = 512
+_IMPORTER = "inspect-robots"
+# Provenance keys that describe the software that wrote a label rather than the label itself.
+# A re-import that differs only in these is the same label, so it must not add a version:
+# otherwise every SDK upgrade would re-stack a new version on every previously imported trial.
+_WRITER_ONLY_SOURCE_METADATA_KEYS = frozenset({"importer_version"})
+
+SourceMetadata = Dict[str, Union[bool, int, float, str]]
 
 # Same rule as ``inspect_robots.frames._safe`` (0.60.0), which names the action and frame
 # side-cars. Copied rather than imported because it is private to Inspect Robots.
 _SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _FRAME_RE = re.compile(r"_(\d{6})\.npy$")
+
+
+def _importer_version() -> str:
+    try:
+        return _package_version("avala")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _clean_source_metadata(raw: Mapping[str, Any]) -> SourceMetadata:
+    """Fit ``raw`` to the server's ``source_metadata`` contract instead of failing the write.
+
+    Null values are dropped (the server rejects null), as are keys that are empty or longer
+    than 64 characters, non-finite numbers, and anything that is not a string, number or
+    boolean. Strings are cut to 512 characters. At most 20 keys are kept, in ``raw``'s
+    order, so callers list the most important keys first.
+    """
+    clean: SourceMetadata = {}
+    for key, value in raw.items():
+        if len(clean) >= _MAX_SOURCE_METADATA_KEYS:
+            break
+        if not isinstance(key, str) or not key or len(key) > _MAX_SOURCE_METADATA_KEY or value is None:
+            continue
+        if isinstance(value, bool):
+            clean[key] = value
+        elif isinstance(value, (int, float)):
+            if math.isfinite(value):
+                clean[key] = value
+        elif isinstance(value, str):
+            clean[key] = value[:_MAX_SOURCE_METADATA_VALUE]
+    return clean
 
 
 def _safe(name: str) -> str:
@@ -133,6 +178,26 @@ class TrialMapping:
     actions_path: Optional[str] = None
     sequence_uid: Optional[str] = None
 
+    def source_metadata(self) -> SourceMetadata:
+        """Run provenance stored on the outcome label, fitted to the server's limits.
+
+        ``log_file`` is the log's file name only: a local path would leak the importing
+        machine's directory layout to everyone who can read the dataset.
+        """
+        log_file = self.metadata.get("log_file")
+        return _clean_source_metadata(
+            {
+                "importer": _IMPORTER,
+                "importer_version": _importer_version(),
+                "run_id": self.metadata.get("inspect_robots_run_id"),
+                "task": self.metadata.get("inspect_robots_task") or None,
+                "trial_id": self.trial_id,
+                "log_file": Path(log_file).name if isinstance(log_file, str) and log_file else None,
+                "epoch": self.epoch,
+                "scene": self.scene_id,
+            }
+        )
+
     def outcome_kwargs(self) -> Dict[str, Any]:
         """Keyword arguments for ``client.sequence_outcomes.set``."""
         return {
@@ -143,6 +208,7 @@ class TrialMapping:
             "model_version": self.model_version,
             "evaluation_membership": "held_out_eval",
             "source": "imported",
+            "source_metadata": self.source_metadata(),
         }
 
     def to_dict(self) -> Dict[str, Any]:
@@ -549,7 +615,18 @@ def _attach(client: "Client", owner: str, slug: str, rows: Sequence[TrialMapping
     return attached
 
 
+def _label_provenance(source_metadata: Mapping[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in source_metadata.items() if key not in _WRITER_ONLY_SOURCE_METADATA_KEYS}
+
+
 def _same_label(current: "SequenceOutcome", wanted: Mapping[str, Any]) -> bool:
+    """Whether writing ``wanted`` would only repeat ``current``.
+
+    Compares every field the importer sets, ``source_metadata`` included, so a trial
+    re-imported from a different run (or with a different task, log file, ...) gets a new
+    label version while a plain re-run does not. ``importer_version`` is left out: it says
+    which SDK wrote the label, not what the label says.
+    """
     subtasks = [subtask.model_dump() for subtask in current.subtasks]
     return bool(
         current.outcome == wanted["outcome"]
@@ -559,6 +636,7 @@ def _same_label(current: "SequenceOutcome", wanted: Mapping[str, Any]) -> bool:
         and current.model_version == wanted["model_version"]
         and current.evaluation_membership == wanted["evaluation_membership"]
         and current.source == wanted["source"]
+        and _label_provenance(current.source_metadata) == _label_provenance(wanted["source_metadata"])
     )
 
 

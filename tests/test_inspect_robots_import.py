@@ -332,6 +332,11 @@ def test_cli_reports_the_missing_extra_cleanly(monkeypatch: pytest.MonkeyPatch) 
 # ──────────────────────────────────────────────────────────────────────────────
 # Attach and write
 # ──────────────────────────────────────────────────────────────────────────────
+def _main_run_id() -> str:
+    actions = _log()["samples"][0]["trial_metadata"][0]["actions"]  # actions/<run_id>/<trial>.jsonl
+    return Path(actions).parts[1]
+
+
 def _seq(uid: str, stem: str) -> Dict[str, Any]:
     return {"uid": uid, "key": f"orgs/acme/cubepick-eval/{stem}"}
 
@@ -396,7 +401,19 @@ def test_attach_writes_one_imported_label_per_matched_trial(plain_json_reader: N
         "model_version": "scripted@cubepick-oracle-v1",
         "evaluation_membership": "held_out_eval",
         "source": "imported",
+        "source_metadata": {
+            "importer": "inspect-robots",
+            "importer_version": ir._importer_version(),
+            "run_id": _main_run_id(),
+            "task": "cubepick-reach-eval",
+            "trial_id": "reach-slow-e0",
+            "log_file": "eval_log.json",
+            "epoch": 0,
+            "scene": "reach-slow",
+        },
     }
+    # The log was read from an absolute path; only its file name may leave this machine.
+    assert all(str(FIXTURES) not in json.dumps(body) for body in sent.values())
 
 
 @respx.mock
@@ -537,3 +554,143 @@ def test_create_converts_each_trial_trace_to_one_mcap(
         assert len(fast["/inspect_robots/camera/top"]) == steps + 1
     else:
         assert "/inspect_robots/camera/top" not in fast
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Provenance on the label (source_metadata)
+# ──────────────────────────────────────────────────────────────────────────────
+def test_source_metadata_drops_nulls_and_fits_the_server_limits() -> None:
+    raw: Dict[str, Any] = {
+        "keep": "v",
+        "none": None,  # the server rejects null
+        "": "empty key",
+        "k" * 65: "key too long",
+        "long": "x" * 600,
+        "nan": float("nan"),
+        "inf": float("inf"),
+        "nested": {"a": 1},
+        "list": [1, 2],
+        "flag": False,
+        "zero": 0,
+        "ratio": 0.25,
+        "k" * 64: "longest allowed key",
+    }
+    clean = ir._clean_source_metadata(raw)
+
+    assert clean == {
+        "keep": "v",
+        "long": "x" * 512,
+        "flag": False,
+        "zero": 0,
+        "ratio": 0.25,
+        "k" * 64: "longest allowed key",
+    }
+    # At most 20 keys, keeping the first ones (the importer lists the important keys first).
+    many = ir._clean_source_metadata({f"key{i:02d}": i for i in range(25)})
+    assert list(many) == [f"key{i:02d}" for i in range(20)]
+
+
+def test_source_metadata_identifies_the_run_and_trial() -> None:
+    rows = _by_trial(ir.map_eval_log(_log(), log_path=str(MAIN_LOG)))
+    assert rows["reach-flaky-e1"].source_metadata() == {
+        "importer": "inspect-robots",
+        "importer_version": ir._importer_version(),
+        "run_id": _main_run_id(),
+        "task": "cubepick-reach-eval",
+        "trial_id": "reach-flaky-e1",
+        "log_file": "eval_log.json",
+        "epoch": 1,
+        "scene": "reach-flaky",
+    }
+
+
+def test_source_metadata_skips_what_the_log_does_not_say_and_truncates_long_values() -> None:
+    data = _log()
+    data["eval"]["task"] = ""
+    long_run = "r" * 600
+    for sample in data["samples"]:
+        for meta in sample["trial_metadata"]:
+            meta["actions"] = f"actions/{long_run}/{Path(meta['actions']).name}"
+
+    metadata = ir.map_eval_log(data)[0].source_metadata()  # no log path given
+
+    assert "task" not in metadata and "log_file" not in metadata
+    assert metadata["run_id"] == "r" * 512
+    assert None not in metadata.values()
+
+
+def _current(wanted: Dict[str, Any], **changes: Any) -> Any:
+    from avala.types.sequence_outcome import SequenceOutcome
+
+    return SequenceOutcome.model_validate(_label("s1", **{**wanted, **changes}))
+
+
+def test_every_sent_field_takes_part_in_the_rerun_comparison() -> None:
+    """A field sent but not compared makes every re-run stack a new label version."""
+    wanted = ir.map_eval_log(_log(), log_path=str(MAIN_LOG))[0].outcome_kwargs()
+    assert ir._same_label(_current(wanted), wanted)
+
+    different = {
+        "outcome": "unsafe",
+        "progress": 0.5,
+        "subtasks": [],
+        "autonomy_level": "teleoperation",
+        "model_version": "other-policy",
+        "evaluation_membership": "train",
+        "source": "human",
+        "source_metadata": {**wanted["source_metadata"], "run_id": "another-run"},
+    }
+    assert set(different) == set(wanted), "a new field in outcome_kwargs() needs a case here and in _same_label"
+    for name, value in different.items():
+        assert not ir._same_label(_current(wanted, **{name: value}), wanted), name
+
+
+def test_rerun_comparison_ignores_only_the_importer_version() -> None:
+    wanted = ir.map_eval_log(_log(), log_path=str(MAIN_LOG))[0].outcome_kwargs()
+    provenance = wanted["source_metadata"]
+
+    assert ir._same_label(_current(wanted, source_metadata={**provenance, "importer_version": "0.0.1"}), wanted)
+    for key in ("importer", "run_id", "task", "trial_id", "log_file", "epoch", "scene"):
+        changed = {**provenance, key: "changed"}
+        assert not ir._same_label(_current(wanted, source_metadata=changed), wanted), key
+        missing = {k: v for k, v in provenance.items() if k != key}
+        assert not ir._same_label(_current(wanted, source_metadata=missing), wanted), key
+
+
+@respx.mock
+def test_reimport_writes_only_labels_whose_provenance_changed(plain_json_reader: None) -> None:
+    _mock_sequences({"reach-fast-e0": "s-fast0", "reach-fast-e1": "s-fast1", "reach-slow-e0": "s-slow0"})
+    planned = _by_trial(ir.map_eval_log(_log(), log_path=str(MAIN_LOG)))
+    same = planned["reach-fast-e0"].outcome_kwargs()
+    other_run = planned["reach-fast-e1"].outcome_kwargs()
+    other_run["source_metadata"] = {**other_run["source_metadata"], "run_id": "an-earlier-run"}
+    legacy = {**planned["reach-slow-e0"].outcome_kwargs(), "source_metadata": {}}  # imported before provenance
+    respx.get(LIST_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [_label("s-fast0", **same), _label("s-fast1", **other_run), _label("s-slow0", **legacy)],
+                "next": None,
+                "previous": None,
+            },
+        )
+    )
+    put = respx.put(url__regex=rf"{SEQ_URL}[^/]+/outcome/").mock(
+        side_effect=lambda request: httpx.Response(200, json=_label(request.url.path.split("/")[-3]))
+    )
+
+    rows = _by_trial(
+        list(ir.import_inspect_robots(Client(api_key="k"), log=str(MAIN_LOG), dataset=f"{OWNER}/{SLUG}").rows)
+    )
+
+    assert rows["reach-fast-e0"].status == "unchanged"
+    assert (rows["reach-fast-e1"].status, rows["reach-slow-e0"].status) == ("labelled", "labelled")
+    sent = {call.request.url.path.split("/")[-3]: json.loads(call.request.content) for call in put.calls}
+    assert sorted(sent) == ["s-fast1", "s-slow0"]
+    assert sent["s-fast1"]["source_metadata"]["run_id"] == _main_run_id()
+    assert sent["s-slow0"]["source_metadata"] == planned["reach-slow-e0"].source_metadata()
+
+
+def test_receipt_and_json_output_are_unchanged_by_provenance() -> None:
+    row = ir.map_eval_log(_log(), log_path=str(MAIN_LOG))[0]
+    assert "source_metadata" not in row.to_dict()

@@ -79,7 +79,16 @@ Verified against `inspect-robots` 0.60.0; the module docstring has the full mapp
 - **Trajectories are side-cars, and the run id exists only in their paths.**
   `trial_metadata[i]["actions"]` is `actions/<run_id>/<scene>-e<epoch>.jsonl`, relative to the
   log's directory; frames (only with `--store-frames`) are `frames/<run_id>/*.npy`.
-- **`SequenceOutcome` has no metadata field** (server serializer), so run id / task / scores ride
-  in the receipt, `-o json`, and the `/inspect_robots/trial` MCAP topic, not on the label.
+- **Run provenance rides on the label's `source_metadata`** (`TrialMapping.source_metadata()`):
+  `importer`, `importer_version`, `run_id`, `task`, `trial_id`, `log_file` (basename only, never a
+  local path), `epoch`, `scene`. The server caps it at 20 flat keys (<= 64 chars) to strings
+  (<= 512 chars), finite numbers or bools, no null; `_clean_source_metadata` fits values to that
+  rather than failing the write. Scores, termination reason etc. stay in the receipt, `-o json`
+  and the `/inspect_robots/trial` MCAP topic, because they are nested.
+- **Re-runs must not stack label versions.** `_same_label` compares every field the importer
+  sends, `source_metadata` included, except `importer_version` (it names the writer, not the
+  label; comparing it would add a version to every trial on each SDK upgrade). Any new field
+  added to `outcome_kwargs()` must be added to `_same_label` too, or every re-run writes a new
+  version; `test_every_sent_field_takes_part_in_the_rerun_comparison` fails when one is missed.
 - **Regenerate the fixture with Inspect Robots, never by hand:**
   `tests/fixtures/inspect_robots/generate_fixture.py` (needs Python 3.10+).
