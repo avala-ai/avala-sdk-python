@@ -22,7 +22,12 @@ from avala.types.manual_upload import AllowedMimes, UploadQuota
 from avala.types.organization import Invitation, Organization, OrganizationMember, Team, TeamMember
 from avala.types.project import Project
 from avala.types.quality_target import QualityTarget, QualityTargetEvaluation
-from avala.types.sequence_outcome import SequenceOutcome, SequenceOutcomeSubtask
+from avala.types.sequence_outcome import (
+    SequenceHandAction,
+    SequenceHandActions,
+    SequenceOutcome,
+    SequenceOutcomeSubtask,
+)
 from avala.types.slice import Slice, SliceItem
 from avala.types.storage_config import StorageConfig
 from avala.types.task import Task
@@ -65,6 +70,8 @@ __all__ = [
     "Rule",
     "QualityTarget",
     "QualityTargetEvaluation",
+    "SequenceHandAction",
+    "SequenceHandActions",
     "SequenceOutcome",
     "SequenceOutcomeSubtask",
     "Slice",

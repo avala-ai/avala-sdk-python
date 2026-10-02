@@ -419,8 +419,23 @@ def test_export_dataset_writes_outcome_sidecar_per_episode(monkeypatch, tmp_path
     monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
     full = _sequence(uid="seqX", n=1, n_cams=1).model_dump(mode="json")
     _wire_seq_routes(["seq1", "seq2"], lambda *_: httpx.Response(200, json=full))
+    hand_actions = {
+        "left": [
+            {
+                "start_ts": 0.0,
+                "end_ts": 2.0,
+                "action": "holding the piston",
+                "object": "piston",
+                "verb": "hold",
+                "contact": True,
+            }
+        ],
+        "right": [],
+    }
     respx.get(f"{BASE_URL}/datasets/o/s/sequences/seq1/outcome/").mock(
-        return_value=httpx.Response(200, json=_outcome_json("seq1"))
+        return_value=httpx.Response(
+            200, json=_outcome_json("seq1", hand_actions=hand_actions, source_metadata={"run_id": "run-42"})
+        )
     )
     respx.get(f"{BASE_URL}/datasets/o/s/sequences/seq2/outcome/").mock(
         return_value=httpx.Response(404, json={"detail": "This sequence has no outcome label."})
@@ -436,7 +451,18 @@ def test_export_dataset_writes_outcome_sidecar_per_episode(monkeypatch, tmp_path
     assert rows[0]["evaluation_membership"] == "held_out_eval"
     assert rows[0]["recovery_type"] is None  # empty strings map to null
     assert rows[0]["subtasks"][0]["label"] == "regrasp"
+    # Per-hand streams ride along unchanged; timestamps stay seconds from episode start.
+    assert rows[0]["hand_actions"] == hand_actions
+    assert rows[0]["outcome_source_metadata"] == {"run_id": "run-42"}
     assert rows[1] == {"episode_index": 1, "avala_sequence_uid": "seq2", "outcome": None}
+
+
+def test_outcome_episode_metadata_maps_missing_hand_actions_to_empty_streams():
+    from avala.types.sequence_outcome import SequenceOutcome
+
+    row = al.outcome_episode_metadata(4, "seqZ", SequenceOutcome.model_validate(_outcome_json("seqZ")))
+    assert row["episode_index"] == 4
+    assert row["hand_actions"] == {"left": [], "right": []}
 
 
 @respx.mock

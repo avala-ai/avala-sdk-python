@@ -1,0 +1,286 @@
+{
+  "error": null,
+  "eval": {
+    "created": "2026-10-01T23:13:57.359684+00:00",
+    "embodiment": "cubepick",
+    "embodiment_info": {
+      "capabilities": [
+        "auto_reset",
+        "privileged_success",
+        "renderable",
+        "resettable",
+        "seedable"
+      ],
+      "control_hz": 10.0,
+      "is_simulated": true
+    },
+    "environment_id": "cubepick-mock",
+    "environment_revision": null,
+    "git_commit": null,
+    "grader": null,
+    "grader_config": {},
+    "inspect_robots_version": "0.60.0",
+    "max_seconds": null,
+    "max_steps": 12,
+    "policy": "scripted",
+    "policy_checkpoint": "cubepick-oracle-v1",
+    "policy_config": {
+      "action_horizon": 4,
+      "replan_interval": null,
+      "temperature": null
+    },
+    "seed": 0,
+    "task": "cubepick-reach-eval"
+  },
+  "results": {
+    "errored_trials": 1,
+    "metrics": {
+      "episode_length": 10.625,
+      "success_at_end": 0.5,
+      "task_progress": 0.680254344716956
+    },
+    "total_scenes": 4,
+    "total_trials": 8
+  },
+  "samples": [
+    {
+      "epochs": [
+        {
+          "episode_length": 8.0,
+          "success_at_end": 1.0,
+          "task_progress": 1.0
+        },
+        {
+          "episode_length": 11.0,
+          "success_at_end": 1.0,
+          "task_progress": 1.0
+        }
+      ],
+      "error": null,
+      "instruction": "reach the cube",
+      "judgement_sources": [
+        null,
+        null
+      ],
+      "operator_judgements": [
+        null,
+        null
+      ],
+      "operator_messages": [
+        [],
+        []
+      ],
+      "operator_notes": [
+        null,
+        null
+      ],
+      "policy_transcripts": [
+        null,
+        null
+      ],
+      "reduced": {
+        "episode_length": 9.5,
+        "success_at_end": 1.0,
+        "task_progress": 1.0
+      },
+      "scene_id": "reach-fast",
+      "scene_metadata": {
+        "speed": 0.1
+      },
+      "status": "success",
+      "termination_reasons": [
+        "success",
+        "success"
+      ],
+      "trial_metadata": [
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-fast-e0.jsonl"
+        },
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-fast-e1.jsonl"
+        }
+      ]
+    },
+    {
+      "epochs": [
+        {
+          "episode_length": 12.0,
+          "success_at_end": 0.0,
+          "task_progress": 0.7522310126304266
+        },
+        {
+          "episode_length": 12.0,
+          "success_at_end": 0.0,
+          "task_progress": 0.7527987153166444
+        }
+      ],
+      "error": null,
+      "instruction": "reach the cube",
+      "judgement_sources": [
+        null,
+        null
+      ],
+      "operator_judgements": [
+        null,
+        null
+      ],
+      "operator_messages": [
+        [],
+        []
+      ],
+      "operator_notes": [
+        null,
+        null
+      ],
+      "policy_transcripts": [
+        null,
+        null
+      ],
+      "reduced": {
+        "episode_length": 12.0,
+        "success_at_end": 0.0,
+        "task_progress": 0.7525148639735355
+      },
+      "scene_id": "reach-slow",
+      "scene_metadata": {
+        "speed": 0.05
+      },
+      "status": "success",
+      "termination_reasons": [
+        "max_steps",
+        "max_steps"
+      ],
+      "trial_metadata": [
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-slow-e0.jsonl"
+        },
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-slow-e1.jsonl"
+        }
+      ]
+    },
+    {
+      "epochs": [
+        {
+          "episode_length": 12.0,
+          "success_at_end": 0.0,
+          "task_progress": 0.0
+        },
+        {
+          "episode_length": 12.0,
+          "success_at_end": 0.0,
+          "task_progress": 0.0
+        }
+      ],
+      "error": null,
+      "instruction": "reach the cube",
+      "judgement_sources": [
+        null,
+        null
+      ],
+      "operator_judgements": [
+        null,
+        null
+      ],
+      "operator_messages": [
+        [],
+        []
+      ],
+      "operator_notes": [
+        null,
+        null
+      ],
+      "policy_transcripts": [
+        null,
+        null
+      ],
+      "reduced": {
+        "episode_length": 12.0,
+        "success_at_end": 0.0,
+        "task_progress": 0.0
+      },
+      "scene_id": "reach-stuck",
+      "scene_metadata": {
+        "speed": 0.0
+      },
+      "status": "success",
+      "termination_reasons": [
+        "max_steps",
+        "max_steps"
+      ],
+      "trial_metadata": [
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-stuck-e0.jsonl"
+        },
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-stuck-e1.jsonl"
+        }
+      ]
+    },
+    {
+      "epochs": [
+        {
+          "episode_length": 9.0,
+          "success_at_end": 1.0,
+          "task_progress": 0.9685025148942883
+        },
+        {}
+      ],
+      "error": "PolicyError: simulated inference server timeout",
+      "instruction": "reach the cube",
+      "judgement_sources": [
+        null,
+        null
+      ],
+      "operator_judgements": [
+        null,
+        null
+      ],
+      "operator_messages": [
+        [],
+        []
+      ],
+      "operator_notes": [
+        null,
+        null
+      ],
+      "policy_transcripts": [
+        null,
+        null
+      ],
+      "reduced": {
+        "episode_length": 9.0,
+        "success_at_end": 1.0,
+        "task_progress": 0.9685025148942883
+      },
+      "scene_id": "reach-flaky",
+      "scene_metadata": {
+        "fail_epoch": 1,
+        "speed": 0.1
+      },
+      "status": "error",
+      "termination_reasons": [
+        "success",
+        null
+      ],
+      "trial_metadata": [
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-flaky-e0.jsonl"
+        },
+        {
+          "actions": "actions/20261001_231357_fbf9b72b/reach-flaky-e1.jsonl"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "completed_at": "2026-10-01T23:13:57.456216+00:00",
+    "duration_s": 0.052404481917619705,
+    "frames_dir": null,
+    "mean_inference_latency_s": null,
+    "started_at": "2026-10-01T23:13:57.403830+00:00",
+    "total_steps": 76
+  },
+  "status": "success",
+  "version": 1
+}

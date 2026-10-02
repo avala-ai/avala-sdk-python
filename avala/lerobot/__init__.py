@@ -27,7 +27,10 @@ label (``client.sequence_outcomes``) is written to
 ``meta/avala_sequence_outcomes.jsonl``, one JSON object per saved episode keyed by
 LeRobot ``episode_index`` (Avala sequence → LeRobot episode). LeRobot's own
 episode table has no slot for arbitrary per-episode metadata, so this is a
-sidecar next to it. Unlabeled sequences get ``"outcome": null``.
+sidecar next to it. Unlabeled sequences get ``"outcome": null``. Each labeled row
+carries ``hand_actions`` — ``{"left": [...], "right": [...]}`` per-hand action
+streams of ``{start_ts, end_ts, action, object, verb, contact}``, timestamps in
+seconds from the start of the episode (= the Avala sequence).
 
 Requires the optional ``lerobot`` extra (Python 3.12+)::
 
@@ -394,6 +397,7 @@ def outcome_episode_metadata(
             "quality": outcome.quality,
             "speed": outcome.speed,
             "subtasks": [subtask.model_dump() for subtask in outcome.subtasks],
+            "hand_actions": outcome.hand_actions.model_dump(),
             "mistake_type": outcome.mistake_type or None,
             "recovery_type": outcome.recovery_type or None,
             "failure_stage": outcome.failure_stage or None,
@@ -402,6 +406,7 @@ def outcome_episode_metadata(
             "evaluation_membership": outcome.evaluation_membership or None,
             "leakage_groups": dict(outcome.leakage_groups),
             "outcome_source": outcome.source,
+            "outcome_source_metadata": dict(outcome.source_metadata),
             "outcome_confidence": outcome.confidence,
         }
     )

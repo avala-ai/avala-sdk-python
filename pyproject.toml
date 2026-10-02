@@ -45,6 +45,20 @@ rosbag = [
     "pillow>=9.0",
 ]
 
+# Inspect Robots eval logs -> outcome-labelled sequences (avala.importers.inspect_robots).
+# inspect-robots reads/validates the JSON eval log; the MCAP packages convert recorded
+# trial actions/frames for `--create`. inspect-robots itself does not depend on
+# inspect-ai, so neither does this extra.
+# NOTE: inspect-robots requires Python 3.10+; this extra is unusable on 3.9.
+inspect = [
+    "inspect-robots>=0.60,<1; python_version >= '3.10'",
+    "mcap>=1.1",
+    "mcap-protobuf-support>=0.5",
+    "foxglove-schemas-protobuf>=0.3",
+    "numpy>=1.24",
+    "pillow>=9.0",
+]
+
 [project.scripts]
 avala = "avala.cli:main"
 

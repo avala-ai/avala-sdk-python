@@ -1,0 +1,13 @@
+{"kind": "header", "run_id": "20261001_231357_fbf9b72b", "scene_id": "reach-stuck", "epoch": 0, "action_dim": 2, "labels": ["dx", "dy"]}
+{"t": 0, "action": [0.0, 0.0]}
+{"t": 1, "action": [0.0, 0.0]}
+{"t": 2, "action": [0.0, 0.0]}
+{"t": 3, "action": [0.0, 0.0]}
+{"t": 4, "action": [0.0, 0.0]}
+{"t": 5, "action": [0.0, 0.0]}
+{"t": 6, "action": [0.0, 0.0]}
+{"t": 7, "action": [0.0, 0.0]}
+{"t": 8, "action": [0.0, 0.0]}
+{"t": 9, "action": [0.0, 0.0]}
+{"t": 10, "action": [0.0, 0.0]}
+{"t": 11, "action": [0.0, 0.0]}

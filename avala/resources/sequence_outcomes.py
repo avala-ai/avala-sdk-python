@@ -55,6 +55,7 @@ def _set_payload(
     quality: Optional[int],
     speed: Optional[int],
     subtasks: Optional[List[Mapping[str, Any]]],
+    hand_actions: Optional[Mapping[str, Sequence[Mapping[str, Any]]]],
     mistake_type: Optional[str],
     recovery_type: Optional[str],
     failure_stage: Optional[str],
@@ -64,6 +65,7 @@ def _set_payload(
     leakage_groups: Optional[Mapping[str, str]],
     source: Optional[str],
     confidence: Optional[float],
+    source_metadata: Optional[Mapping[str, Any]],
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {"outcome": outcome}
     optional: Dict[str, Any] = {
@@ -71,6 +73,11 @@ def _set_payload(
         "quality": quality,
         "speed": speed,
         "subtasks": [dict(subtask) for subtask in subtasks] if subtasks is not None else None,
+        "hand_actions": (
+            {hand: [dict(item) for item in items] for hand, items in hand_actions.items()}
+            if hand_actions is not None
+            else None
+        ),
         "mistake_type": mistake_type,
         "recovery_type": recovery_type,
         "failure_stage": failure_stage,
@@ -80,6 +87,7 @@ def _set_payload(
         "leakage_groups": dict(leakage_groups) if leakage_groups is not None else None,
         "source": source,
         "confidence": confidence,
+        "source_metadata": dict(source_metadata) if source_metadata is not None else None,
     }
     payload.update({key: value for key, value in optional.items() if value is not None})
     return payload
@@ -109,6 +117,7 @@ class SequenceOutcomes(BaseSyncResource):
         quality: Optional[int] = None,
         speed: Optional[int] = None,
         subtasks: Optional[List[Mapping[str, Any]]] = None,
+        hand_actions: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
         mistake_type: Optional[str] = None,
         recovery_type: Optional[str] = None,
         failure_stage: Optional[str] = None,
@@ -118,14 +127,27 @@ class SequenceOutcomes(BaseSyncResource):
         leakage_groups: Optional[Mapping[str, str]] = None,
         source: Optional[str] = None,
         confidence: Optional[float] = None,
+        source_metadata: Optional[Mapping[str, Any]] = None,
     ) -> SequenceOutcome:
-        """Record a new current label (requires edit access to the dataset)."""
+        """Record a new current label (requires edit access to the dataset).
+
+        ``hand_actions`` is ``{"left": [...], "right": [...]}`` (either key may be
+        omitted); each item is ``{start_ts, end_ts, action, object?, verb?, contact?}``
+        in seconds from sequence start. Within a hand, items must be ordered and must
+        not overlap; the server caps each hand at 3,600 items and rejects ``end_ts``
+        past the sequence when it knows the duration.
+
+        ``source_metadata`` records import provenance (e.g. ``{"importer": ...,
+        "run_id": ..., "task": ..., "log_path": ...}``): a flat object of at most 20
+        keys (<= 64 characters) to strings (<= 512 characters), numbers or booleans.
+        """
         payload = _set_payload(
             outcome,
             progress=progress,
             quality=quality,
             speed=speed,
             subtasks=subtasks,
+            hand_actions=hand_actions,
             mistake_type=mistake_type,
             recovery_type=recovery_type,
             failure_stage=failure_stage,
@@ -135,6 +157,7 @@ class SequenceOutcomes(BaseSyncResource):
             leakage_groups=leakage_groups,
             source=source,
             confidence=confidence,
+            source_metadata=source_metadata,
         )
         data = self._transport.request("PUT", _outcome_url(owner, slug, sequence_uid), json=payload)
         return SequenceOutcome.model_validate(data)
@@ -189,6 +212,7 @@ class AsyncSequenceOutcomes(BaseAsyncResource):
         quality: Optional[int] = None,
         speed: Optional[int] = None,
         subtasks: Optional[List[Mapping[str, Any]]] = None,
+        hand_actions: Optional[Mapping[str, Sequence[Mapping[str, Any]]]] = None,
         mistake_type: Optional[str] = None,
         recovery_type: Optional[str] = None,
         failure_stage: Optional[str] = None,
@@ -198,6 +222,7 @@ class AsyncSequenceOutcomes(BaseAsyncResource):
         leakage_groups: Optional[Mapping[str, str]] = None,
         source: Optional[str] = None,
         confidence: Optional[float] = None,
+        source_metadata: Optional[Mapping[str, Any]] = None,
     ) -> SequenceOutcome:
         payload = _set_payload(
             outcome,
@@ -205,6 +230,7 @@ class AsyncSequenceOutcomes(BaseAsyncResource):
             quality=quality,
             speed=speed,
             subtasks=subtasks,
+            hand_actions=hand_actions,
             mistake_type=mistake_type,
             recovery_type=recovery_type,
             failure_stage=failure_stage,
@@ -214,6 +240,7 @@ class AsyncSequenceOutcomes(BaseAsyncResource):
             leakage_groups=leakage_groups,
             source=source,
             confidence=confidence,
+            source_metadata=source_metadata,
         )
         data = await self._transport.request("PUT", _outcome_url(owner, slug, sequence_uid), json=payload)
         return SequenceOutcome.model_validate(data)

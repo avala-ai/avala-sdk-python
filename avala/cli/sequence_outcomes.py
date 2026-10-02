@@ -14,6 +14,7 @@ from avala.types.sequence_outcome import (
     LEAKAGE_GROUP_KEYS,
     OUTCOME_SOURCES,
     OUTCOMES,
+    SequenceHandAction,
     SequenceOutcome,
 )
 
@@ -26,6 +27,7 @@ _DETAIL_KEYS = [
     "quality",
     "speed",
     "subtasks",
+    "hand_actions",
     "mistake_type",
     "recovery_type",
     "failure_stage",
@@ -34,6 +36,7 @@ _DETAIL_KEYS = [
     "evaluation_membership",
     "leakage_groups",
     "source",
+    "source_metadata",
     "confidence",
     "created_at",
 ]
@@ -41,6 +44,12 @@ _DETAIL_KEYS = [
 
 def _dash(value: Any) -> str:
     return "—" if value in (None, "", [], {}) else str(value)
+
+
+def _hand_summary(actions: list[SequenceHandAction]) -> str:
+    if not actions:
+        return "—"
+    return f"{len(actions)} actions, {actions[0].start_ts:g}–{actions[-1].end_ts:g} s"
 
 
 def _print_outcome(o: SequenceOutcome) -> None:
@@ -55,6 +64,8 @@ def _print_outcome(o: SequenceOutcome) -> None:
             ("Quality", _dash(o.quality)),
             ("Speed", _dash(o.speed)),
             ("Subtasks", _dash(json.dumps([s.model_dump() for s in o.subtasks]) if o.subtasks else None)),
+            ("Left hand", _hand_summary(o.hand_actions.left)),
+            ("Right hand", _hand_summary(o.hand_actions.right)),
             ("Mistake type", _dash(o.mistake_type)),
             ("Recovery type", _dash(o.recovery_type)),
             ("Failure stage", _dash(o.failure_stage)),
@@ -63,6 +74,7 @@ def _print_outcome(o: SequenceOutcome) -> None:
             ("Evaluation", _dash(o.evaluation_membership)),
             ("Leakage groups", _dash(json.dumps(o.leakage_groups) if o.leakage_groups else None)),
             ("Source", o.source),
+            ("Source metadata", _dash(json.dumps(o.source_metadata) if o.source_metadata else None)),
             ("Confidence", _dash(o.confidence)),
             ("Created", _dash(o.created_at)),
         ],
@@ -175,6 +187,12 @@ def list_outcomes(
     default=None,
     help="JSON file: ordered list of {label, start_ts, end_ts, outcome}",
 )
+@click.option(
+    "--hand-actions-file",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help='JSON file: {"left": [...], "right": [...]} of {start_ts, end_ts, action, object, verb, contact}',
+)
 @click.option("--mistake-type", default=None)
 @click.option("--recovery-type", default=None)
 @click.option("--failure-stage", default=None)
@@ -188,6 +206,12 @@ def list_outcomes(
     help=f"KEY=ID, repeatable; keys: {', '.join(LEAKAGE_GROUP_KEYS)}",
 )
 @click.option("--source", type=click.Choice(OUTCOME_SOURCES), default=None, help="Label source (default human)")
+@click.option(
+    "--source-metadata",
+    "source_metadata_json",
+    default=None,
+    help='Import provenance as a flat JSON object, e.g. \'{"importer": "x", "run_id": "r1"}\'',
+)
 @click.option("--confidence", type=click.FloatRange(0, 1), default=None, help="Model confidence (source=model only)")
 @click.pass_context
 def set_outcome(
@@ -200,6 +224,7 @@ def set_outcome(
     quality: int | None,
     speed: int | None,
     subtasks_file: str | None,
+    hand_actions_file: str | None,
     mistake_type: str | None,
     recovery_type: str | None,
     failure_stage: str | None,
@@ -208,6 +233,7 @@ def set_outcome(
     evaluation_membership: str | None,
     leakage_group: tuple[str, ...],
     source: str | None,
+    source_metadata_json: str | None,
     confidence: float | None,
 ) -> None:
     """Record a new current outcome label (replaces the previous version wholesale)."""
@@ -217,6 +243,22 @@ def set_outcome(
             subtasks = json.load(fh)
         if not isinstance(subtasks, list):
             raise click.BadParameter("must contain a JSON list", param_hint="--subtasks-file")
+    hand_actions = None
+    if hand_actions_file:
+        with open(hand_actions_file, encoding="utf-8") as fh:
+            hand_actions = json.load(fh)
+        if not isinstance(hand_actions, dict):
+            raise click.BadParameter(
+                'must contain a JSON object {"left": [...], "right": [...]}', param_hint="--hand-actions-file"
+            )
+    source_metadata = None
+    if source_metadata_json:
+        try:
+            source_metadata = json.loads(source_metadata_json)
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(f"invalid JSON: {exc}", param_hint="--source-metadata") from exc
+        if not isinstance(source_metadata, dict):
+            raise click.BadParameter("must be a JSON object", param_hint="--source-metadata")
     leakage_groups = None
     if leakage_group:
         leakage_groups = {}
@@ -234,6 +276,7 @@ def set_outcome(
         quality=quality,
         speed=speed,
         subtasks=subtasks,
+        hand_actions=hand_actions,
         mistake_type=mistake_type,
         recovery_type=recovery_type,
         failure_stage=failure_stage,
@@ -243,5 +286,6 @@ def set_outcome(
         leakage_groups=leakage_groups,
         source=source,
         confidence=confidence,
+        source_metadata=source_metadata,
     )
     _print_outcome(result)

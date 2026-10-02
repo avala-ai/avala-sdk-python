@@ -65,3 +65,21 @@ uploads must keep that isolation, or leftover state makes later runs skip files.
   identities or exceed the manifest's count/size bounds in aggregate.
 - Provider URL validation mirrors the server's grant grammar, including regional path-style S3
   dualstack hosts. Rights metadata has an exact field set; never expose undeclared response extras.
+
+## Inspect Robots importer (`avala/importers/inspect_robots.py`)
+
+Verified against `inspect-robots` 0.60.0; the module docstring has the full mapping table.
+
+- **It is not an Inspect AI log.** `inspect-robots` does not depend on `inspect-ai` and does not
+  write `.eval` archives. It writes its own JSON `EvalLog` (schema version 1) whose shape mirrors
+  Inspect AI's. Read it with `inspect_robots.read_eval_log`, never `inspect_ai.log`.
+- **One `samples[]` entry is a scene, not a trial.** Trial *i* of a scene is index *i* across the
+  parallel lists `epochs`, `termination_reasons`, `operator_judgements`, `trial_metadata`. An
+  errored or cancelled trial is recorded but never scored, so its `epochs[i]` is `{}`.
+- **Trajectories are side-cars, and the run id exists only in their paths.**
+  `trial_metadata[i]["actions"]` is `actions/<run_id>/<scene>-e<epoch>.jsonl`, relative to the
+  log's directory; frames (only with `--store-frames`) are `frames/<run_id>/*.npy`.
+- **`SequenceOutcome` has no metadata field** (server serializer), so run id / task / scores ride
+  in the receipt, `-o json`, and the `/inspect_robots/trial` MCAP topic, not on the label.
+- **Regenerate the fixture with Inspect Robots, never by hand:**
+  `tests/fixtures/inspect_robots/generate_fixture.py` (needs Python 3.10+).

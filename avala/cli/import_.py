@@ -281,3 +281,129 @@ def import_cloud_cmd(
     click.echo(
         f"Dataset created: {dataset.uid} ({dataset.name}) — type={dataset.data_type}, items={dataset.item_count}"
     )
+
+
+@import_group.command("inspect-robots")
+@click.argument("log", type=click.Path(exists=True, dir_okay=False))
+@click.option("--dataset", required=True, help="Target dataset as owner/slug")
+@click.option("--dry-run", is_flag=True, default=False, help="Print the trial -> outcome mapping; no network calls")
+@click.option(
+    "--create",
+    is_flag=True,
+    default=False,
+    help="Convert each trial's recorded actions/frames to MCAP and create the dataset (default: attach to existing)",
+)
+@click.option("--name", default=None, help="Dataset name with --create (default: the slug)")
+@click.option("--organization-uid", default=None, help="With --create, create the dataset under this organization")
+@click.option(
+    "--success-key",
+    default=None,
+    help="Scorer that decides success (default: success_at_end, reached_goal_state or operator, if present)",
+)
+@click.option(
+    "--success-threshold", type=float, default=0.5, show_default=True, help="Success score at or above this succeeds"
+)
+@click.option("--score-key", default=None, help="Scorer that grades a success (default: the success scorer)")
+@click.option(
+    "--expert-threshold",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="A success scoring at or above this is expert_success, below it partial_success",
+)
+@click.option("--progress-key", default=None, help="Copy this scorer's [0, 1] value into the outcome's progress")
+@click.option("--overwrite", is_flag=True, default=False, help="Replace existing human/model labels")
+@click.option(
+    "--receipt",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Write the full mapping (incl. run id, task and scores per trial) to this JSON file",
+)
+@click.pass_context
+def import_inspect_robots_cmd(
+    ctx: click.Context,
+    log: str,
+    dataset: str,
+    dry_run: bool,
+    create: bool,
+    name: str | None,
+    organization_uid: str | None,
+    success_key: str | None,
+    success_threshold: float,
+    score_key: str | None,
+    expert_threshold: float,
+    progress_key: str | None,
+    overwrite: bool,
+    receipt: str | None,
+) -> None:
+    """Import Inspect Robots evaluation logs as outcome-labelled sequences.
+
+    LOG is the JSON eval log an Inspect Robots run writes (<task>_<id>.json). Each trial
+    (scene x epoch) labels one sequence: success -> expert_success / partial_success,
+    failure -> failure, errored or cancelled -> aborted; source=imported,
+    evaluation_membership=held_out_eval, model_version from the run's policy.
+    Requires the 'inspect' extra: pip install 'avala[inspect]'.
+    """
+    import json
+
+    from avala.cli._output import _get_output_format, print_table
+    from avala.importers.inspect_robots import import_inspect_robots
+
+    try:
+        result = import_inspect_robots(
+            None if dry_run else ctx.obj["client"],
+            log=log,
+            dataset=dataset,
+            dry_run=dry_run,
+            create=create,
+            name=name,
+            organization_uid=organization_uid,
+            success_key=success_key,
+            success_threshold=success_threshold,
+            score_key=score_key,
+            expert_threshold=expert_threshold,
+            progress_key=progress_key,
+            overwrite=overwrite,
+        )
+    except ModuleNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if receipt:
+        with open(receipt, "w", encoding="utf-8") as fh:
+            json.dump(result.to_dict(), fh, indent=2, sort_keys=True, default=str)
+
+    def _fmt(value: float | None) -> str:
+        return "—" if value is None else f"{value:g}"
+
+    if _get_output_format() == "json":
+        # Machine-readable output keeps every field, including reason and metadata.
+        click.echo(json.dumps(result.to_dict(), indent=2, sort_keys=True, default=str))
+        return
+
+    model = result.rows[0].model_version if result.rows else "—"
+    columns = ["Trial", "Outcome", "Success", "Score", "Progress", "Status"]
+    if not result.dry_run:
+        columns.append("Sequence")
+    print_table(
+        f"Inspect Robots {'dry run' if result.dry_run else 'import'}: {result.task} "
+        f"(run {result.run_id}, model {model}) -> {result.owner}/{result.slug}",
+        columns,
+        [
+            (
+                row.trial_id,
+                row.outcome or "—",
+                _fmt(row.success_value),
+                _fmt(row.score_value),
+                _fmt(row.progress),
+                row.status,
+            )
+            + (() if result.dry_run else (row.sequence_uid or "—",))
+            for row in result.rows
+        ],
+    )
+    for row in result.rows:
+        if row.status not in ("planned", "labelled", "unchanged"):
+            click.echo(f"{row.trial_id}: {row.status}: {row.reason}", err=True)
+    if not result.dry_run:
+        counts = {status: result.count(status) for status in sorted({row.status for row in result.rows})}
+        click.echo(", ".join(f"{status}={count}" for status, count in counts.items()), err=True)

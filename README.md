@@ -254,6 +254,26 @@ ready, within the wait timeout. Completed receipts are retained. Local SHA-256
 checks detect observed source changes; they do not independently verify current
 remote contents.
 
+## Import Inspect Robots evaluation logs
+
+Turn each trial of an [Inspect Robots](https://github.com/robocurve/inspect-robots) evaluation
+run into an outcome-labelled sequence. Successes map to `expert_success` or `partial_success`
+by a configurable score threshold, failures to `failure`, and errored or cancelled trials to
+`aborted`. Labels are written with `source=imported` and `evaluation_membership=held_out_eval`,
+and `model_version` comes from the run's policy. Requires `pip install 'avala[inspect]'`
+(Python 3.10+).
+
+```bash
+# Preview the mapping offline, then label the dataset's sequences (one per trial)
+avala import inspect-robots logs/cubepick-reach_1a2b3c4d.json --dataset acme/cubepick-eval --dry-run
+avala import inspect-robots logs/cubepick-reach_1a2b3c4d.json --dataset acme/cubepick-eval
+
+# Or create the dataset from the trials' recorded actions and frames
+avala import inspect-robots logs/cubepick-reach_1a2b3c4d.json --dataset acme/cubepick-eval --create
+```
+
+See the [CLI reference](https://avala.ai/docs/sdks/cli) for the full mapping table and options.
+
 ## Available Resources
 
 | Resource | Methods | Description |
