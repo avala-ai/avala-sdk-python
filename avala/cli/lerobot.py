@@ -65,6 +65,24 @@ def lerobot() -> None:
     default=False,
     help="Write each episode's Avala sequence outcome label to meta/avala_sequence_outcomes.jsonl",
 )
+@click.option(
+    "--control-source-key",
+    default=None,
+    help="Dotted path into the raw frame dict for who was driving (policy/teleop/intervention/hold)",
+)
+@click.option(
+    "--control-source-column",
+    default="annotation.avala.control_source",
+    show_default=True,
+    help="LeRobot column name for --control-source-key",
+)
+@click.option(
+    "--backend",
+    type=click.Choice(["auto", "lerobot", "core"]),
+    default="auto",
+    show_default=True,
+    help="Writer: the lerobot library, the torch-free core writer, or auto (lerobot if installed)",
+)
 @click.pass_context
 def export_cmd(
     ctx: click.Context,
@@ -84,6 +102,9 @@ def export_cmd(
     tags: tuple[str, ...],
     repo_license: str | None,
     include_outcomes: bool,
+    control_source_key: str | None,
+    control_source_column: str,
+    backend: str,
 ) -> None:
     """Convert an Avala sequence dataset (DATASET = OWNER/SLUG) to a LeRobot v3 dataset.
 
@@ -118,5 +139,8 @@ def export_cmd(
         tags=list(tags) or None,
         repo_license=repo_license,
         include_outcomes=include_outcomes,
+        backend=backend,
+        control_source_key=control_source_key,
+        control_source_column=control_source_column,
     )
     click.echo(f"LeRobot dataset written to {out}")

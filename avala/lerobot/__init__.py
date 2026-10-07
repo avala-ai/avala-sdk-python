@@ -22,19 +22,32 @@ and ``action`` are emitted **only** when an explicit ``state_key``/``action_key`
 resolves to a numeric vector inside the raw frame dict (or, opt-in, the camera-rig
 ego pose) — they are never fabricated as zeros.
 
+**Control source.** ``control_source_key`` names a dotted path into each raw frame that
+says who was driving (``policy`` / ``teleop`` / ``intervention`` / ``hold``); it is
+written verbatim as a per-frame string column, ``annotation.avala.control_source`` by
+default (``control_source_column``). To export MCAP episodes directly (e.g. data that was
+imported from LeRobot, whose ``control_source`` column is on ``/lerobot/control_source``),
+use :func:`avala.converters.lerobot_v3.mcap.mcap_to_lerobot`.
+
 **Outcome labels.** With ``include_outcomes=True`` each sequence's current outcome
 label (``client.sequence_outcomes``) is written to
 ``meta/avala_sequence_outcomes.jsonl``, one JSON object per saved episode keyed by
 LeRobot ``episode_index`` (Avala sequence → LeRobot episode). LeRobot's own
 episode table has no slot for arbitrary per-episode metadata, so this is a
-sidecar next to it. Unlabeled sequences get ``"outcome": null``. Each labeled row
+sidecar next to it. Unlabeled sequences get ``"outcome": null``. LeRobot's one native
+language field is the per-frame ``task``: when the outcome's ``source_metadata`` carries
+the task text (``task``, ``task_text``, ``instruction`` or ``language_instruction``) it
+replaces the ``task`` argument for that episode. Nothing else is mapped onto LeRobot
+columns, because LeRobot defines none for it. Each labeled row
 carries ``hand_actions`` — ``{"left": [...], "right": [...]}`` per-hand action
 streams of ``{start_ts, end_ts, action, object, verb, contact}``, timestamps in
 seconds from the start of the episode (= the Avala sequence).
 
-Requires the optional ``lerobot`` extra (Python 3.12+)::
-
-    pip install "avala[lerobot]"
+Writing uses the ``lerobot`` library when it is installed (``pip install "avala[lerobot]"``,
+Python 3.12+, pulls in torch) and otherwise the torch-free
+:class:`avala.converters.lerobot_v3.LeRobotV3Writer` (``pip install
+"avala[lerobot-core-video]"``), which writes the same v3 layout. ``backend=`` forces one.
+``push=True`` needs the lerobot library.
 
 Example::
 
@@ -58,6 +71,8 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 
+from avala.converters.lerobot_v3.mcap import DEFAULT_CONTROL_SOURCE_COLUMN
+
 if TYPE_CHECKING:
     from avala._client import Client
     from avala.types.dataset import DatasetSequence
@@ -70,6 +85,7 @@ __all__ = [
     "convert_sequence",
     "discover_camera_specs",
     "outcome_episode_metadata",
+    "outcome_task_text",
     "OUTCOMES_SIDECAR",
 ]
 
@@ -79,8 +95,11 @@ OUTCOMES_SIDECAR = "meta/avala_sequence_outcomes.jsonl"
 _MEDIA_TIMEOUT = 30.0
 _IMG_PREFIX = "observation.images."
 _INSTALL_HINT = (
-    'avala.lerobot requires the lerobot library (Python 3.12+). Install it with: pip install "avala[lerobot]"'
+    "avala.lerobot needs either the torch-free writer "
+    '(pip install "avala[lerobot-core-video]") or the lerobot library '
+    '(Python 3.12+, pip install "avala[lerobot]")'
 )
+_BACKENDS = ("auto", "lerobot", "core")
 
 # A camera spec resolved from frame 0: (name, height, width).
 CameraSpec = Tuple[str, int, int]
@@ -96,12 +115,27 @@ def _numpy() -> Any:
     return np
 
 
-def _lerobot_dataset_cls() -> Any:
+def _lerobot_dataset_cls(backend: str = "auto") -> Any:
+    """The dataset class to write with: ``lerobot.datasets.LeRobotDataset`` or, when the
+    lerobot library is unavailable (or ``backend="core"``), the torch-free writer. Both
+    expose ``create`` / ``add_frame`` / ``save_episode`` / ``finalize``."""
+    if backend not in _BACKENDS:
+        raise ValueError(f"backend must be one of {_BACKENDS}, got {backend!r}")
+    if backend in ("auto", "lerobot"):
+        try:
+            from lerobot.datasets import LeRobotDataset
+        except ModuleNotFoundError as exc:
+            if backend == "lerobot":
+                raise ModuleNotFoundError(_INSTALL_HINT) from exc
+        else:
+            return LeRobotDataset
     try:
-        from lerobot.datasets import LeRobotDataset
-    except ModuleNotFoundError as exc:  # pragma: no cover - exercised via install extra
+        import pyarrow  # noqa: F401
+
+        from avala.converters.lerobot_v3.writer import LeRobotV3Writer
+    except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(_INSTALL_HINT) from exc
-    return LeRobotDataset
+    return LeRobotV3Writer
 
 
 def _decode_image(content: bytes) -> Any:
@@ -158,6 +192,18 @@ def _resolve_vector(frame: Dict[str, Any], dotted_key: str) -> List[float]:
     ):
         return [float(x) for x in cur]
     raise ValueError(f"key {dotted_key!r} did not resolve to a non-empty numeric vector")
+
+
+def _resolve_string(frame: Dict[str, Any], dotted_key: str) -> str:
+    """Resolve a dotted key into the raw frame dict to a non-empty string (all-or-nothing)."""
+    cur: Any = frame
+    for part in dotted_key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            raise KeyError(f"key {dotted_key!r} not found in frame (missing {part!r})")
+        cur = cur[part]
+    if isinstance(cur, str) and cur:
+        return cur
+    raise ValueError(f"key {dotted_key!r} did not resolve to a non-empty string (got {cur!r})")
 
 
 def _has_ego_pose(frame: Dict[str, Any]) -> bool:
@@ -232,6 +278,8 @@ def build_features(
     action_key: Optional[str] = None,
     include_ego_pose: bool = False,
     use_videos: bool = True,
+    control_source_key: Optional[str] = None,
+    control_source_column: str = DEFAULT_CONTROL_SOURCE_COLUMN,
 ) -> Dict[str, Dict[str, Any]]:
     """Build the LeRobot v3 ``features`` dict from resolved camera specs + frame 0.
 
@@ -240,6 +288,8 @@ def build_features(
     ``observation.state``/``action`` only when the corresponding key resolves to a
     numeric vector on frame 0, or a 7-dim ego-pose ``observation.state`` when
     ``include_ego_pose``. Camera specs come from :func:`discover_camera_specs`.
+    ``control_source_key`` adds a per-frame string column ``control_source_column``
+    (default ``annotation.avala.control_source``) when it resolves to a string on frame 0.
     """
     if state_key and include_ego_pose:
         raise ValueError("use either state_key or include_ego_pose, not both (both map to observation.state)")
@@ -287,6 +337,11 @@ def build_features(
             "shape": (len(vector),),
             "names": [f"action_{i}" for i in range(len(vector))],
         }
+    if control_source_key:
+        _resolve_string(first, control_source_key)
+        if control_source_column in features or "/" in control_source_column:
+            raise ValueError(f"invalid control_source_column {control_source_column!r}")
+        features[control_source_column] = {"dtype": "string", "shape": (1,), "names": None}
     return features
 
 
@@ -299,6 +354,8 @@ def iter_frames(
     action_key: Optional[str] = None,
     include_ego_pose: bool = False,
     task: str,
+    control_source_key: Optional[str] = None,
+    control_source_column: str = DEFAULT_CONTROL_SOURCE_COLUMN,
 ) -> Iterator[Dict[str, Any]]:
     """Yield ``add_frame``-ready dicts for one sequence (one episode).
 
@@ -346,6 +403,8 @@ def iter_frames(
             if action_dim is not None and len(vector) != action_dim:
                 raise ValueError(f"action on frame {frame_index} has length {len(vector)}, expected {action_dim}")
             sample["action"] = np.asarray(vector, dtype="float32")
+        if control_source_key:
+            sample[control_source_column] = _resolve_string(frame, control_source_key)
         yield sample
 
 
@@ -359,6 +418,8 @@ def convert_sequence(
     action_key: Optional[str] = None,
     include_ego_pose: bool = False,
     task: str,
+    control_source_key: Optional[str] = None,
+    control_source_column: str = DEFAULT_CONTROL_SOURCE_COLUMN,
 ) -> int:
     """Append one Avala sequence to an open LeRobotDataset as one episode.
 
@@ -374,6 +435,8 @@ def convert_sequence(
         action_key=action_key,
         include_ego_pose=include_ego_pose,
         task=task,
+        control_source_key=control_source_key,
+        control_source_column=control_source_column,
     ):
         ds.add_frame(sample)
         count += 1
@@ -411,6 +474,22 @@ def outcome_episode_metadata(
         }
     )
     return row
+
+
+# Keys of SequenceOutcome.source_metadata that hold the episode's task / instruction text.
+# The outcome model has no dedicated task field; labelling tools record it here.
+OUTCOME_TASK_KEYS = ("task", "task_text", "instruction", "language_instruction")
+
+
+def outcome_task_text(outcome: "Optional[SequenceOutcome]") -> Optional[str]:
+    """The outcome's task (language instruction) text, when its ``source_metadata`` has one."""
+    if outcome is None:
+        return None
+    for key in OUTCOME_TASK_KEYS:
+        value = outcome.source_metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _current_outcome(client: "Client", owner: str, slug: str, sequence_uid: str) -> "Optional[SequenceOutcome]":
@@ -464,6 +543,9 @@ def export_dataset(
     tags: Optional[List[str]] = None,
     repo_license: Optional[str] = None,
     include_outcomes: bool = False,
+    backend: str = "auto",
+    control_source_key: Optional[str] = None,
+    control_source_column: str = DEFAULT_CONTROL_SOURCE_COLUMN,
 ) -> Path:
     """Convert an Avala sequence dataset to a LeRobot v3 dataset on disk.
 
@@ -474,6 +556,12 @@ def export_dataset(
     ``repo_license`` overrides lerobot's default card license.
     ``include_outcomes=True`` writes each episode's Avala outcome label to
     ``meta/avala_sequence_outcomes.jsonl`` (see the module docstring).
+    ``backend`` is ``"auto"`` (lerobot library if installed, else the torch-free
+    writer), ``"lerobot"`` or ``"core"``. ``control_source_key`` is a dotted path into
+    each raw frame resolving to who was driving (``policy`` / ``teleop`` /
+    ``intervention`` / ``hold``); it is written verbatim as the per-frame string column
+    ``control_source_column``. Like state/action it is all-or-nothing: a frame without it
+    is an error, never a guessed value.
     """
     if state_key and include_ego_pose:
         raise ValueError("use either state_key or include_ego_pose, not both (both map to observation.state)")
@@ -482,7 +570,12 @@ def export_dataset(
     if not task or not task.strip():
         raise ValueError("task must be a non-empty string")
 
-    lerobot_dataset_cls = _lerobot_dataset_cls()
+    lerobot_dataset_cls = _lerobot_dataset_cls(backend)
+    if push and getattr(lerobot_dataset_cls, "__module__", "").startswith("avala.converters."):
+        raise ModuleNotFoundError(
+            'push=True needs the lerobot library (pip install "avala[lerobot]"); the torch-free writer '
+            "writes the dataset locally — upload it with `huggingface-cli upload ... --repo-type dataset`"
+        )
     out = Path(output_dir)
 
     sequences = _list_sequences(client, owner, slug, limit)
@@ -513,6 +606,8 @@ def export_dataset(
             action_key=action_key,
             include_ego_pose=include_ego_pose,
             use_videos=use_videos,
+            control_source_key=control_source_key,
+            control_source_column=control_source_column,
         )
         if "observation.state" not in features and "action" not in features:
             warnings.warn(
@@ -536,6 +631,7 @@ def export_dataset(
             if not _frames(full):
                 warnings.warn(f"sequence {seq_meta.uid} has no frames; skipping", stacklevel=2)
                 continue
+            outcome = _current_outcome(client, owner, slug, seq_meta.uid) if include_outcomes else None
             written = convert_sequence(
                 ds,
                 full,
@@ -544,11 +640,14 @@ def export_dataset(
                 state_key=state_key,
                 action_key=action_key,
                 include_ego_pose=include_ego_pose,
-                task=task,
+                # LeRobot's own per-frame language field: the labelled task text when the
+                # outcome carries one, else the caller's task string.
+                task=outcome_task_text(outcome) or task,
+                control_source_key=control_source_key,
+                control_source_column=control_source_column,
             )
             if include_outcomes and written:
                 # episode_index is lerobot's 0-based save order, which is ours.
-                outcome = _current_outcome(client, owner, slug, seq_meta.uid)
                 outcome_rows.append(outcome_episode_metadata(len(outcome_rows), seq_meta.uid, outcome))
     except Exception:
         # Footer whatever episodes were already saved so a mid-batch failure does

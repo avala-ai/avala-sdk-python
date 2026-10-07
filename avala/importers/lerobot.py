@@ -6,16 +6,32 @@ episode (one ``.mcap`` = one ``DatasetItem`` = one ``McapEpisode``). Inside each
 * **Camera streams** are written as ``foxglove.CompressedImage`` (protobuf) — the format
   the Avala server indexer and the Mission Control MCAP viewer both understand, so the
   frames render as image panels.
-* **Proprioception** (``observation.state``, ``action``, and any other 1-D numeric
-  features) is written as ``google.protobuf.Struct`` messages so the values are preserved
-  in the file and inspectable as raw messages.
+* **Proprioception** (``observation.state``, ``action``) is written as
+  ``google.protobuf.Struct`` ``{"data": [floats]}`` messages on ``/observation/state`` and
+  ``/action``.
+* **Every other non-image per-frame column** — numeric or categorical, e.g. rewards,
+  ``episode_uuid``, ``failure_type`` — is carried on its own topic (``a.b`` -> ``/a/b``),
+  and a ``control_source`` column (``policy``/``teleop``/``intervention``/``hold``, often
+  stored as ``annotation.<vendor>.control_source``) on the stable topic
+  ``/lerobot/control_source``. The per-frame task text goes to ``/lerobot/task``. Nothing
+  is dropped. Full table: :mod:`avala.converters.lerobot_v3.mcap`.
+* An ``avala.lerobot`` MCAP metadata record keeps the original feature specs and the
+  feature->topic map, so the episode can be exported back to LeRobot unchanged.
 
   NOTE: Mission Control's embedded MCAP viewer renders images, point clouds and logs, but
   does not yet *chart* scalar time-series. State/action are therefore preserved and
   raw-viewable, but not plotted. That's a viewer feature, not an import limitation.
 
-The reader uses the ``lerobot`` library (install via ``pip install 'avala[lerobot]'``);
-the converter targets the LeRobot v2.1/v3 dataset API (verified against ``lerobot`` 0.5.x).
+Two interchangeable readers (``backend=``):
+
+* ``"lerobot"`` — the ``lerobot`` library (``pip install 'avala[lerobot]'``; Python 3.12+,
+  pulls in torch), verified against ``lerobot`` 0.5.x;
+* ``"core"`` — the torch-free :mod:`avala.converters.lerobot_v3` reader
+  (``pip install 'avala[lerobot-core-video]'``), LeRobot v3 datasets only. A ``repo_id``
+  without ``root`` is downloaded with ``huggingface_hub`` when it is installed.
+
+``"auto"`` (the default) uses the lerobot library when it is importable and the core
+reader otherwise. Both produce the same MCAP.
 """
 
 from __future__ import annotations
@@ -31,125 +47,33 @@ if TYPE_CHECKING:
 __all__ = ["import_lerobot", "write_episode_mcap"]
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# MCAP writing — pure, dependency-light (no lerobot/torch). Testable in isolation.
-# ──────────────────────────────────────────────────────────────────────────────
-def write_episode_mcap(out_path: str, frames: Iterable[Dict[str, Any]]) -> int:
-    """Write ``frames`` to an MCAP file at ``out_path``; return the frame count.
+def write_episode_mcap(out_path: str, frames: Iterable[Dict[str, Any]], **kwargs: Any) -> int:
+    """Write writer frames to an MCAP file; see :func:`avala.converters.lerobot_v3.mcap.write_episode_mcap`.
 
-    Each frame is a self-describing dict::
-
-        {
-            "timestamp_ns": int,                       # nanoseconds, monotonic
-            "images":  {topic: np.ndarray HWC uint8},  # one entry per camera
-            "structs": {topic: dict},                  # e.g. {"data": [floats]}
-        }
-
-    Camera arrays are JPEG-encoded into ``foxglove.CompressedImage``; struct payloads
-    become ``google.protobuf.Struct`` messages. ``mcap_protobuf`` auto-registers the
-    protobuf schemas (with the FileDescriptorSet the viewer needs) and writes the
-    summary section the server parser requires.
+    Kept here (it is the historical import location); the implementation is
+    dependency-light (mcap + foxglove protobuf + pillow, no lerobot/torch).
     """
-    from io import BytesIO
+    from avala.converters.lerobot_v3.mcap import write_episode_mcap as _write
 
-    from foxglove_schemas_protobuf.CompressedImage_pb2 import CompressedImage
-    from google.protobuf.struct_pb2 import Struct
-    from mcap_protobuf.writer import Writer
-    from PIL import Image
-
-    count = 0
-    with open(out_path, "wb") as fh, Writer(fh) as writer:
-        for frame in frames:
-            t_ns = int(frame["timestamp_ns"])
-            sec, nsec = divmod(t_ns, 1_000_000_000)
-
-            for topic, arr in (frame.get("images") or {}).items():
-                buf = BytesIO()
-                Image.fromarray(arr).save(buf, format="JPEG", quality=95)
-                msg = CompressedImage()
-                msg.timestamp.seconds = sec
-                msg.timestamp.nanos = nsec
-                msg.frame_id = topic.strip("/").replace("/", ".")
-                msg.format = "jpeg"
-                msg.data = buf.getvalue()
-                writer.write_message(topic=topic, message=msg, log_time=t_ns, publish_time=t_ns)
-
-            for topic, payload in (frame.get("structs") or {}).items():
-                struct = Struct()
-                struct.update(payload)
-                writer.write_message(topic=topic, message=struct, log_time=t_ns, publish_time=t_ns)
-
-            count += 1
-    return count
+    return _write(out_path, frames, **kwargs)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LeRobot → frame-dict adaptation
-# ──────────────────────────────────────────────────────────────────────────────
 def _to_hwc_uint8(value: Any) -> Any:
     """Normalize a LeRobot image (CHW or HWC, float[0,1] or uint8) to HWC uint8."""
-    import numpy as np
+    from avala.converters.lerobot_v3._values import to_hwc_uint8
 
-    arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
-    # CHW -> HWC: a leading axis of 1/3/4 that is smaller than the trailing axis is a
-    # channel dim (LeRobot returns torch CHW image tensors).
-    if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[0] < arr.shape[2]:
-        arr = np.transpose(arr, (1, 2, 0))
-    if arr.dtype != np.uint8:
-        peak = float(arr.max()) if arr.size else 0.0
-        # float [0,1] -> scale to [0,255]; otherwise assume [0,255] space. Clip both
-        # branches so out-of-range / negative values can't wrap during the uint8 cast.
-        arr = np.clip(arr, 0.0, 1.0) * 255.0 if peak <= 1.0 else np.clip(arr, 0.0, 255.0)
-        arr = arr.round().astype(np.uint8)
-    if arr.ndim == 3 and arr.shape[2] == 1:
-        arr = arr[:, :, 0]
-    return arr
+    return to_hwc_uint8(value)
 
 
 def _to_list(value: Any) -> List[float]:
     """Flatten a tensor / array / scalar of numbers to a flat list of floats."""
-    import numpy as np
+    from avala.converters.lerobot_v3._values import flat_numbers
 
-    arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
-    return [float(x) for x in np.asarray(arr).reshape(-1)]
-
-
-def _topic_for_camera(key: str) -> str:
-    """``observation.images.laptop`` -> ``/observation/images/laptop``."""
-    return "/" + key.replace(".", "/")
+    return [float(x) for x in flat_numbers(value)]
 
 
-def _build_frame(
-    sample: Dict[str, Any],
-    camera_keys: Sequence[str],
-    state_keys: Sequence[str],
-    fps: float,
-) -> Dict[str, Any]:
-    """Convert a single LeRobot sample into a writer frame dict."""
-    images = {_topic_for_camera(key): _to_hwc_uint8(sample[key]) for key in camera_keys if key in sample}
-    structs: Dict[str, Any] = {}
-    for key in state_keys:
-        if key in sample:
-            structs["/" + key.replace(".", "/")] = {"data": _to_list(sample[key])}
-
-    ts = sample.get("timestamp")
-    if ts is not None:
-        timestamp_ns = int(float(ts.item() if hasattr(ts, "item") else ts) * 1_000_000_000)
-    else:
-        frame_index = sample.get("frame_index", 0)
-        frame_index = float(frame_index.item() if hasattr(frame_index, "item") else frame_index)
-        timestamp_ns = int(frame_index / fps * 1_000_000_000)
-
-    return {"timestamp_ns": timestamp_ns, "images": images, "structs": structs}
-
-
-def _episode_streams(
-    dataset: Any,
-    camera_keys: Sequence[str],
-    state_keys: Sequence[str],
-    fps: float,
-) -> Iterator[tuple]:
-    """Yield ``(episode_index, frames_iter)`` groups over all loaded frames.
+def _episode_samples(dataset: Any) -> Iterator[tuple]:
+    """Yield ``(episode_index, samples_iter)`` groups over all loaded frames.
 
     Frames within a LeRobot episode are contiguous and ordered, so grouping the linear
     ``dataset[i]`` stream by each sample's ``episode_index`` recovers per-episode bounds
@@ -158,15 +82,97 @@ def _episode_streams(
     """
     import itertools
 
-    def _frames() -> Iterator[tuple]:
+    def _samples() -> Iterator[tuple]:
         for i in range(len(dataset)):
             sample = dataset[i]
             ep = sample.get("episode_index", 0)
             ep = int(ep.item() if hasattr(ep, "item") else ep)
-            yield ep, _build_frame(sample, camera_keys, state_keys, fps)
+            yield ep, sample
 
-    for ep, group in itertools.groupby(_frames(), key=lambda pair: pair[0]):
-        yield ep, (frame for _ep, frame in group)
+    for ep, group in itertools.groupby(_samples(), key=lambda pair: pair[0]):
+        yield ep, (sample for _ep, sample in group)
+
+
+class _LibrarySource:
+    """Frames via the ``lerobot`` library."""
+
+    def __init__(self, rid: str, root: Optional[str]) -> None:
+        from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+
+        self._rid = rid
+        self._root = root
+        meta = LeRobotDatasetMetadata(rid, root=root)
+        self.camera_keys: List[str] = list(meta.camera_keys)
+        self.features: Dict[str, Any] = dict(meta.features)
+        self.fps = float(meta.fps)
+        self.total_episodes = int(meta.total_episodes)
+        self.robot_type: Optional[str] = getattr(meta, "robot_type", None)
+        info = getattr(meta, "info", None)
+        self.codebase_version: Optional[str] = info.get("codebase_version") if isinstance(info, dict) else None
+
+    def episode_samples(self, selected: Sequence[int], keys: Sequence[str]) -> Iterator[tuple]:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        # Pass ``episodes=`` so LeRobot only downloads/loads the requested episodes.
+        dataset = LeRobotDataset(self._rid, root=self._root, episodes=list(selected))
+        return _episode_samples(dataset)
+
+
+class _CoreSource:
+    """Frames via the torch-free :mod:`avala.converters.lerobot_v3` reader (v3 layout only)."""
+
+    def __init__(self, repo_id: Optional[str], root: Optional[str]) -> None:
+        from avala.converters.lerobot_v3.reader import LeRobotV3Dataset
+
+        self._ds = LeRobotV3Dataset(root if root else _download_snapshot(repo_id or ""))
+        self.camera_keys = self._ds.camera_keys
+        self.features: Dict[str, Any] = self._ds.features
+        self.fps = self._ds.fps
+        self.total_episodes = self._ds.total_episodes
+        self.robot_type = self._ds.robot_type
+        self.codebase_version: Optional[str] = str(self._ds.info.get("codebase_version"))
+
+    def episode_samples(self, selected: Sequence[int], keys: Sequence[str]) -> Iterator[tuple]:
+        for ep in selected:
+            yield ep, self._ds.iter_frames(ep, keys=list(keys))
+
+
+def _download_snapshot(repo_id: str) -> str:
+    try:
+        from huggingface_hub import snapshot_download
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "importing a Hub repo_id without the lerobot library needs huggingface_hub "
+            "(pip install huggingface_hub), or pass root= to a local copy of the dataset"
+        ) from exc
+    return str(snapshot_download(repo_id, repo_type="dataset"))
+
+
+_BACKENDS = ("auto", "lerobot", "core")
+
+
+def _open_source(repo_id: Optional[str], root: Optional[str], rid: str, backend: str) -> Any:
+    if backend not in _BACKENDS:
+        raise ValueError(f"backend must be one of {_BACKENDS}, got {backend!r}")
+    if backend in ("auto", "lerobot"):
+        try:
+            import lerobot.datasets.lerobot_dataset  # noqa: F401
+        except ModuleNotFoundError as exc:
+            if backend == "lerobot":
+                raise ModuleNotFoundError(
+                    "LeRobot import with backend='lerobot' requires the 'lerobot' extra. "
+                    "Install it with: pip install 'avala[lerobot]'"
+                ) from exc
+        else:
+            return _LibrarySource(rid, root)
+    try:
+        import pyarrow  # noqa: F401
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without either extra
+        raise ModuleNotFoundError(
+            "LeRobot import requires either the torch-free 'lerobot-core-video' extra "
+            "(pip install 'avala[lerobot-core-video]') or the 'lerobot' extra (pip install 'avala[lerobot]')"
+        ) from exc
+    return _CoreSource(repo_id, root)
 
 
 def import_lerobot(
@@ -188,6 +194,7 @@ def import_lerobot(
     on_progress: "Optional[Callable[[str, int], None]]" = None,
     wait: bool = False,
     wait_timeout: float = 3600.0,
+    backend: str = "auto",
 ) -> "Dataset":
     """Import a LeRobot dataset into Avala as an MCAP dataset.
 
@@ -197,26 +204,21 @@ def import_lerobot(
 
     ``camera_keys`` / ``state_keys`` default to the dataset's camera features and
     ``observation.state`` + ``action``. ``episodes`` limits the export to specific episode
-    indices (default: all).
+    indices (default: all). ``backend`` picks the reader (see the module docstring).
     """
     import os
     import tempfile
 
+    from avala.converters.lerobot_v3.mcap import build_frame, episode_metadata, plan_topics
+
     if not repo_id and not root:
         raise ValueError("provide repo_id (Hugging Face Hub) and/or root (local dataset path)")
-
-    try:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
-    except ModuleNotFoundError as exc:  # pragma: no cover - exercised only without the extra
-        raise ModuleNotFoundError(
-            "LeRobot import requires the 'lerobot' extra. Install it with: pip install 'avala[lerobot]'"
-        ) from exc
 
     rid = repo_id or slug
 
     # Read metadata first (cheap, no video download) to resolve features and validate the
     # episode selection before pulling any media.
-    meta = LeRobotDatasetMetadata(rid, root=root)
+    meta = _open_source(repo_id, root, rid, backend)
     available_cameras = list(meta.camera_keys)
     if camera_keys is not None:
         unknown = [k for k in camera_keys if k not in available_cameras]
@@ -244,14 +246,23 @@ def import_lerobot(
     if not selected:
         raise ValueError("no episodes selected to import")
 
-    # Pass ``episodes=`` so LeRobot only downloads/loads the requested episodes.
-    dataset = LeRobotDataset(rid, root=root, episodes=selected)
+    # Every other non-image per-frame column (control_source, episode_uuid, failure_type,
+    # rewards, ...) is carried on its own topic too — see avala.converters.lerobot_v3.mcap.
+    plan = plan_topics(meta.features, resolved_cameras, resolved_states)
 
     with tempfile.TemporaryDirectory(prefix="avala-lerobot-") as tmp:
         written = 0
-        for ep, frames in _episode_streams(dataset, resolved_cameras, resolved_states, resolved_fps):
+        for ep, samples in meta.episode_samples(selected, plan.keys):
             out_path = os.path.join(tmp, f"episode_{ep:06d}.mcap")
-            if write_episode_mcap(out_path, frames) > 0:
+            frames = (build_frame(sample, plan, resolved_fps) for sample in samples)
+            metadata = episode_metadata(
+                plan,
+                fps=resolved_fps,
+                episode_index=ep,
+                robot_type=meta.robot_type,
+                codebase_version=meta.codebase_version,
+            )
+            if write_episode_mcap(out_path, frames, metadata=metadata) > 0:
                 written += 1
             else:
                 os.remove(out_path)

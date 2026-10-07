@@ -33,6 +33,32 @@ lerobot = [
     "numpy>=2.0",
     "pillow>=9.0",
 ]
+# Torch-free LeRobot v3 reader/writer (avala.converters.lerobot_v3) and the LeRobot <-> MCAP
+# bridge. No torch, no lerobot library: usable on the server and on Python 3.9+. Image
+# features and the MCAP bridge need pillow + the mcap packages, included here; the ROS
+# decoders let MCAP -> LeRobot read ros2msg/ros1msg sensor_msgs/JointState.
+lerobot-core = [
+    "pyarrow>=14",
+    "numpy>=1.23",
+    "pillow>=9.0",
+    "mcap>=1.1",
+    "mcap-protobuf-support>=0.5",
+    "foxglove-schemas-protobuf>=0.3",
+    "mcap-ros2-support>=0.5",
+    "mcap-ros1-support>=0.7",
+]
+# lerobot-core plus PyAV for LeRobot `video` features (mp4 encode/decode).
+lerobot-core-video = [
+    "pyarrow>=14",
+    "numpy>=1.23",
+    "pillow>=9.0",
+    "mcap>=1.1",
+    "mcap-protobuf-support>=0.5",
+    "foxglove-schemas-protobuf>=0.3",
+    "mcap-ros2-support>=0.5",
+    "mcap-ros1-support>=0.7",
+    "av>=12",
+]
 # ROS bag -> Avala MCAP import (avala.importers.rosbag). Reads ROS1 .bag / ROS2 .db3
 # with the pure-Python rosbags lib (no ROS install) and re-encodes camera topics to
 # foxglove.CompressedImage MCAP.
@@ -93,4 +119,31 @@ exclude = [
 [[tool.mypy.overrides]]
 module = ["avala.importers.lerobot", "avala.importers.rosbag"]
 follow_imports = "skip"
+ignore_missing_imports = true
+
+# avala.converters is strictly typed, but its runtime deps are optional and mostly
+# untyped (pyarrow, PyAV, mcap); keep CI (which installs only [dev,cli]) green.
+[[tool.mypy.overrides]]
+module = [
+    "pyarrow",
+    "pyarrow.*",
+    "av",
+    "av.*",
+    "numpy",
+    "numpy.*",
+    "PIL",
+    "PIL.*",
+    "mcap",
+    "mcap.*",
+    "mcap_protobuf",
+    "mcap_protobuf.*",
+    "mcap_ros2",
+    "mcap_ros2.*",
+    "mcap_ros1",
+    "mcap_ros1.*",
+    "foxglove_schemas_protobuf",
+    "foxglove_schemas_protobuf.*",
+    "google.protobuf",
+    "google.protobuf.*",
+]
 ignore_missing_imports = true

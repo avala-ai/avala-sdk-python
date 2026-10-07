@@ -18,7 +18,7 @@ import numpy as np  # noqa: E402
 import respx  # noqa: E402
 from avala import Client  # noqa: E402
 from avala.importers import available_importers, import_ros_bag  # noqa: E402
-from avala.importers.rosbag import _raw_image_to_jpeg, write_bag_mcap  # noqa: E402
+from avala.importers.rosbag import _msg_to_struct, _raw_image_to_jpeg, convert_bag, write_bag_mcap  # noqa: E402
 from PIL import Image  # noqa: E402
 from rosbags.rosbag2 import Writer  # noqa: E402
 from rosbags.typesys import Stores, get_typestore  # noqa: E402
@@ -47,6 +47,8 @@ def _make_bag(
     bad_raw=False,
     stamp_sec=1,
     bag_time_ns=1_000_000_000,
+    joint=False,
+    pointcloud=False,
 ):
     """Write a small ROS2 bag with the requested topics. Returns the bag directory path."""
     ts = get_typestore(Stores.ROS2_HUMBLE)
@@ -112,6 +114,39 @@ def _make_bag(
             )
             conn = writer.add_connection("/camera/depth32", "sensor_msgs/msg/Image", typestore=ts)
             writer.write(conn, 4_000_000_000, bytes(ts.serialize_cdr(msg, "sensor_msgs/msg/Image")))
+        if joint:
+            JointState = ts.types["sensor_msgs/msg/JointState"]
+            conn = writer.add_connection("/joint_states", "sensor_msgs/msg/JointState", typestore=ts)
+            for i in range(3):
+                msg = JointState(
+                    header=Header(stamp=Time(sec=10 + i, nanosec=250), frame_id="base"),
+                    name=["shoulder", "elbow"],
+                    position=np.array([0.125 * i, -0.5], dtype=np.float64),
+                    velocity=np.array([1.0, 2.0 + i], dtype=np.float64),
+                    effort=np.array([], dtype=np.float64),
+                )
+                writer.write(
+                    conn, 1_000_000_000 + i * 10_000_000, bytes(ts.serialize_cdr(msg, "sensor_msgs/msg/JointState"))
+                )
+            Float64 = ts.types["std_msgs/msg/Float64"]
+            conn = writer.add_connection("/gripper", "std_msgs/msg/Float64", typestore=ts)
+            writer.write(conn, 1_100_000_000, bytes(ts.serialize_cdr(Float64(data=0.75), "std_msgs/msg/Float64")))
+        if pointcloud:
+            PointCloud2 = ts.types["sensor_msgs/msg/PointCloud2"]
+            PointField = ts.types["sensor_msgs/msg/PointField"]
+            msg = PointCloud2(
+                header=Header(stamp=Time(sec=5, nanosec=0), frame_id="lidar"),
+                height=1,
+                width=100,
+                fields=[PointField(name="x", offset=0, datatype=7, count=1)],
+                is_bigendian=False,
+                point_step=4,
+                row_step=400,
+                data=np.zeros(400, dtype=np.uint8),
+                is_dense=True,
+            )
+            conn = writer.add_connection("/points", "sensor_msgs/msg/PointCloud2", typestore=ts)
+            writer.write(conn, 5_000_000_000, bytes(ts.serialize_cdr(msg, "sensor_msgs/msg/PointCloud2")))
         if string:
             String = ts.types["std_msgs/msg/String"]
             conn = writer.add_connection("/chatter", "std_msgs/msg/String", typestore=ts)
@@ -134,20 +169,79 @@ def test_rosbag_registered():
 
 
 # ── write_bag_mcap ──
-def test_write_bag_mcap_converts_compressed_and_skips_non_image(tmp_path):
+def test_write_bag_mcap_converts_compressed_and_carries_text(tmp_path):
     bag = _make_bag(tmp_path / "bag", compressed=True, string=True)
     out = tmp_path / "out.mcap"
     written, skipped = write_bag_mcap(str(out), bag)
 
-    assert written == 1
-    assert skipped == {"/chatter"}  # the String topic is reported, not carried
+    assert written == 1  # camera messages
+    assert skipped == set()  # the String topic is now carried
 
     summary = _read_summary(out)
     assert summary is not None
-    assert "foxglove.CompressedImage" in {s.name for s in summary.schemas.values()}
+    assert {"foxglove.CompressedImage", "google.protobuf.Struct"} <= {s.name for s in summary.schemas.values()}
     chan = next(c for c in summary.channels.values() if c.topic == "/camera/compressed")
     assert chan.message_encoding == "protobuf"
-    assert summary.statistics.message_count == 1
+    assert summary.statistics.message_count == 2
+    (chatter,) = [m for topic, m in _decoded(out) if topic == "/chatter"]
+    assert chatter["data"] == "hi"
+
+
+def test_write_bag_mcap_images_only_keeps_old_behaviour(tmp_path):
+    bag = _make_bag(tmp_path / "bag", compressed=True, string=True, joint=True)
+    out = tmp_path / "out.mcap"
+    written, skipped = write_bag_mcap(str(out), bag, carry_non_image=False)
+    assert written == 1
+    assert skipped == {"/chatter", "/joint_states", "/gripper"}
+    assert _read_summary(out).statistics.message_count == 1
+
+
+def _decoded(path):
+    from mcap.reader import make_reader
+    from mcap_protobuf.decoder import DecoderFactory
+
+    with open(path, "rb") as fh:
+        reader = make_reader(fh, decoder_factories=[DecoderFactory()])
+        return [(m.channel.topic, m.decoded_message) for m in reader.iter_decoded_messages()]
+
+
+def test_joint_states_are_carried_exactly(tmp_path):
+    bag = _make_bag(tmp_path / "bag", compressed=False, string=False, joint=True, pointcloud=True)
+    out = tmp_path / "out.mcap"
+    images, structs, skipped = convert_bag(str(out), bag)
+    assert images == 0
+    assert structs == 4  # 3 joint states + 1 gripper value
+    assert skipped == {"/points"}  # 400-byte binary blob: not carried, reported
+
+    msgs = _decoded(out)
+    joints = [m for topic, m in msgs if topic == "/joint_states"]
+    assert [list(m["name"]) for m in joints] == [["shoulder", "elbow"]] * 3
+    assert [list(m["position"]) for m in joints] == [[0.0, -0.5], [0.125, -0.5], [0.25, -0.5]]
+    assert [list(m["velocity"]) for m in joints] == [[1.0, 2.0], [1.0, 3.0], [1.0, 4.0]]
+    assert [list(m["effort"]) for m in joints] == [[], [], []]  # empty stays empty, never filled
+    assert joints[1]["header"]["stamp"]["sec"] == 11 and joints[1]["header"]["stamp"]["nanosec"] == 250
+    assert joints[0]["header"]["frame_id"] == "base"
+    (gripper,) = [m for topic, m in msgs if topic == "/gripper"]
+    assert gripper["data"] == 0.75
+
+
+def test_msg_to_struct_guards():
+    class Blob:
+        __dataclass_fields__ = {"data": None}
+
+        def __init__(self, n):
+            self.data = np.zeros(n, dtype=np.uint8)
+
+    assert _msg_to_struct(Blob(256)) == {"data": [0] * 256}
+    with pytest.raises(ValueError, match="blob"):
+        _msg_to_struct(Blob(257))
+
+    class Big:
+        __dataclass_fields__ = {"data": None}
+        data = np.zeros(5000, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="4096"):
+        _msg_to_struct(Big())
 
 
 def test_write_bag_mcap_encodes_raw_image(tmp_path):
@@ -248,11 +342,11 @@ def _wire_upload(dataset_json):
 
 @respx.mock
 def test_import_ros_bag_end_to_end(tmp_path):
-    bag = _make_bag(tmp_path / "bag", compressed=True, string=True)
+    bag = _make_bag(tmp_path / "bag", compressed=True, string=True, pointcloud=True)
     s3 = _wire_upload({"uid": "d1", "name": "Bag", "slug": "bag", "data_type": "mcap", "item_count": 1})
 
     client = Client(api_key="test-key")
-    with pytest.warns(UserWarning, match="skipped 1 topic"):
+    with pytest.warns(UserWarning, match=r"skipped 1 topic.*/points"):
         ds = import_ros_bag(client, bag=bag, name="Bag", slug="bag")
     client.close()
 
@@ -261,9 +355,23 @@ def test_import_ros_bag_end_to_end(tmp_path):
     assert s3.call_count == 1
 
 
-def test_import_ros_bag_errors_without_images(tmp_path):
-    bag = _make_bag(tmp_path / "bag", compressed=False, string=True)
+@respx.mock
+def test_import_ros_bag_joint_states_only(tmp_path):
+    bag = _make_bag(tmp_path / "bag", compressed=False, string=False, joint=True)
+    s3 = _wire_upload({"uid": "d2", "name": "J", "slug": "j", "data_type": "mcap", "item_count": 1})
     client = Client(api_key="test-key")
-    with pytest.raises(ValueError, match="no camera images"):
+    ds = import_ros_bag(client, bag=bag, name="J", slug="j")
+    client.close()
+    assert ds.uid == "d2" and s3.call_count == 1
+
+
+def test_import_ros_bag_errors_when_nothing_is_carried(tmp_path):
+    bag = _make_bag(tmp_path / "bag", compressed=False, string=False, pointcloud=True)
+    client = Client(api_key="test-key")
+    with pytest.raises(ValueError, match="no camera images or numeric topics"):
         import_ros_bag(client, bag=bag, name="x", slug="x")
+    with pytest.raises(ValueError, match="no camera images"):
+        import_ros_bag(
+            client, bag=_make_bag(tmp_path / "b2", compressed=False), name="x", slug="x", carry_non_image=False
+        )
     client.close()

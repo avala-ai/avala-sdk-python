@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
+import sys
 from typing import Any
 
 import httpx
@@ -276,7 +276,7 @@ def _wire_seq_routes(list_uids, seq_handler):
 def test_export_dataset_orchestration_no_export_step(monkeypatch, tmp_path):
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
     full = _sequence(uid="seqX", n=2, n_cams=1).model_dump(mode="json")
     _wire_seq_routes(["seq1", "seq2"], lambda *_: httpx.Response(200, json=full))
     export_route = respx.post(f"{BASE_URL}/exports/").mock(return_value=httpx.Response(201, json={}))
@@ -300,7 +300,7 @@ def test_export_dataset_orchestration_no_export_step(monkeypatch, tmp_path):
 def test_export_dataset_finalizes_even_on_mid_batch_error(monkeypatch, tmp_path):
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
 
     def _seq_handler(request: httpx.Request) -> httpx.Response:
         uid = request.url.path.rstrip("/").split("/")[-1]
@@ -324,7 +324,7 @@ def test_export_dataset_finalizes_even_on_mid_batch_error(monkeypatch, tmp_path)
 def test_export_dataset_skips_empty_leading_sequence(monkeypatch, tmp_path):
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
 
     def _seq_handler(request: httpx.Request) -> httpx.Response:
         uid = request.url.path.rstrip("/").split("/")[-1]
@@ -348,7 +348,7 @@ def test_export_dataset_skips_empty_leading_sequence(monkeypatch, tmp_path):
 def test_export_dataset_push_brands_tags_and_license(monkeypatch, tmp_path):
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
     full = _sequence(uid="seq1", n=1, n_cams=1).model_dump(mode="json")
     _wire_seq_routes(["seq1"], lambda *_: httpx.Response(200, json=full))
 
@@ -373,16 +373,79 @@ def test_export_dataset_push_brands_tags_and_license(monkeypatch, tmp_path):
 
 
 def test_export_dataset_rejects_bad_repo_id(monkeypatch):
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
     with pytest.raises(ValueError, match="repo_id"):
         export_dataset(Client(api_key="k"), "o", "s", repo_id="no-slash", output_dir="/tmp/x")
 
 
-def test_actionable_error_when_lerobot_missing():
-    if importlib.util.find_spec("lerobot") is not None:
-        pytest.skip("lerobot is installed; cannot test the missing-dependency path")
-    with pytest.raises(ModuleNotFoundError, match=r"avala\[lerobot\]"):
+def test_actionable_error_when_no_writer_is_installed(monkeypatch):
+    # Neither the lerobot library nor pyarrow (the torch-free writer's dependency).
+    monkeypatch.setitem(sys.modules, "lerobot", None)
+    monkeypatch.setitem(sys.modules, "pyarrow", None)
+    with pytest.raises(ModuleNotFoundError, match=r"avala\[lerobot-core-video\].*avala\[lerobot\]"):
         al._lerobot_dataset_cls()
+
+
+def test_backend_lerobot_requires_the_library(monkeypatch):
+    monkeypatch.setitem(sys.modules, "lerobot", None)
+    with pytest.raises(ModuleNotFoundError, match=r"avala\[lerobot\]"):
+        al._lerobot_dataset_cls("lerobot")
+
+
+def test_falls_back_to_core_writer_without_lerobot(monkeypatch):
+    pytest.importorskip("pyarrow")
+    from avala.converters.lerobot_v3.writer import LeRobotV3Writer
+
+    monkeypatch.setitem(sys.modules, "lerobot", None)
+    assert al._lerobot_dataset_cls() is LeRobotV3Writer
+    assert al._lerobot_dataset_cls("core") is LeRobotV3Writer
+    with pytest.raises(ValueError, match="backend"):
+        al._lerobot_dataset_cls("torch")
+
+
+@respx.mock
+def test_export_dataset_with_core_writer_is_readable(tmp_path):
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("PIL")
+    pytest.importorskip("av")
+    from avala.converters.lerobot_v3.reader import LeRobotV3Dataset
+
+    seq = _sequence(uid="seq1", n=3, n_cams=1, state=[1.0, 2.0], action=[0.5]).model_dump(mode="json")
+    _wire_seq_routes(["seq1", "seq2"], lambda *_: httpx.Response(200, json=seq))
+
+    client = Client(api_key="test-key")
+    out = export_dataset(
+        client,
+        "o",
+        "s",
+        repo_id="user/ds",
+        output_dir=tmp_path / "ds",
+        fps=10,
+        task="pick",
+        state_key="obs.state",
+        action_key="action_vec",
+        backend="core",
+    )
+    client.close()
+
+    ds = LeRobotV3Dataset(out)
+    assert ds.total_episodes == 2
+    assert [e["length"] for e in ds.episodes] == [3, 3]
+    frames = list(ds.iter_frames(1))
+    assert [f["frame_index"] for f in frames] == [0, 1, 2]
+    assert frames[0]["observation.state"].tolist() == [1.0, 2.0]
+    assert frames[0]["action"].tolist() == [0.5]
+    assert frames[0]["task"] == "pick"
+    assert frames[0]["observation.images.cam0"].shape == (6, 8, 3)
+
+
+def test_export_push_with_core_writer_fails_before_writing(tmp_path):
+    pytest.importorskip("pyarrow")
+    with pytest.raises(ModuleNotFoundError, match="push=True needs the lerobot library"):
+        export_dataset(
+            Client(api_key="k"), "o", "s", repo_id="u/d", output_dir=tmp_path / "x", push=True, backend="core"
+        )
+    assert not (tmp_path / "x").exists()
 
 
 def _outcome_json(sequence_uid: str, **overrides):
@@ -416,7 +479,7 @@ def test_export_dataset_writes_outcome_sidecar_per_episode(monkeypatch, tmp_path
     """Avala sequence -> LeRobot episode: one sidecar row per SAVED episode, in save order."""
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
     full = _sequence(uid="seqX", n=1, n_cams=1).model_dump(mode="json")
     _wire_seq_routes(["seq1", "seq2"], lambda *_: httpx.Response(200, json=full))
     hand_actions = {
@@ -469,7 +532,7 @@ def test_outcome_episode_metadata_maps_missing_hand_actions_to_empty_streams():
 def test_export_dataset_skips_outcomes_unless_requested(monkeypatch, tmp_path):
     pytest.importorskip("numpy")
     pytest.importorskip("PIL")
-    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda: _FakeLeRobotDataset)
+    monkeypatch.setattr(al, "_lerobot_dataset_cls", lambda *_a, **_k: _FakeLeRobotDataset)
     full = _sequence(uid="seqX", n=1, n_cams=1).model_dump(mode="json")
     _wire_seq_routes(["seq1"], lambda *_: httpx.Response(200, json=full))
     outcome_route = respx.get(f"{BASE_URL}/datasets/o/s/sequences/seq1/outcome/").mock(
@@ -482,3 +545,165 @@ def test_export_dataset_skips_outcomes_unless_requested(monkeypatch, tmp_path):
 
     assert not outcome_route.called
     assert not (tmp_path / al.OUTCOMES_SIDECAR).exists()
+
+
+# ── control_source column on export ──
+def _seq_with_sources(sources, uid="seqC"):
+    frames = []
+    for src in sources:
+        frame = _frame(n_cams=1)
+        if src is not None:
+            frame["control"] = {"source": src}
+        frames.append(frame)
+    return DatasetSequence(uid=uid, number_of_frames=len(frames), frames=frames)
+
+
+def test_build_features_adds_control_source_column():
+    seq = _seq_with_sources(["policy", "teleop"])
+    features = build_features(seq, camera_specs=[("cam0", 6, 8)], control_source_key="control.source")
+    assert features["annotation.avala.control_source"] == {"dtype": "string", "shape": (1,), "names": None}
+    custom = build_features(
+        seq,
+        camera_specs=[("cam0", 6, 8)],
+        control_source_key="control.source",
+        control_source_column="annotation.vendor.control_source",
+    )
+    assert "annotation.vendor.control_source" in custom
+
+
+def test_build_features_control_source_must_resolve_to_string():
+    with pytest.raises(KeyError, match="control.source"):
+        build_features(_seq_with_sources([None]), camera_specs=[("cam0", 6, 8)], control_source_key="control.source")
+    seq = _sequence(n=1)
+    seq.frames[0]["control"] = {"source": 3}
+    with pytest.raises(ValueError, match="non-empty string"):
+        build_features(seq, camera_specs=[("cam0", 6, 8)], control_source_key="control.source")
+
+
+@respx.mock
+def test_iter_frames_emits_control_source_per_frame():
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    respx.get(url__regex=CDN_RE).mock(side_effect=lambda *_: _png_response())
+    seq = _seq_with_sources(["policy", "intervention", "hold"])
+    features = build_features(seq, camera_specs=[("cam0", 6, 8)], control_source_key="control.source")
+    media = httpx.Client()
+    samples = list(
+        iter_frames(seq, media_client=media, features=features, task="t", control_source_key="control.source")
+    )
+    media.close()
+    assert [s["annotation.avala.control_source"] for s in samples] == ["policy", "intervention", "hold"]
+
+
+@respx.mock
+def test_iter_frames_control_source_missing_mid_sequence_errors():
+    pytest.importorskip("numpy")
+    pytest.importorskip("PIL")
+    respx.get(url__regex=CDN_RE).mock(side_effect=lambda *_: _png_response())
+    seq = _seq_with_sources(["policy", None])
+    features = build_features(seq, camera_specs=[("cam0", 6, 8)], control_source_key="control.source")
+    media = httpx.Client()
+    with pytest.raises(KeyError, match="control.source"):
+        list(iter_frames(seq, media_client=media, features=features, task="t", control_source_key="control.source"))
+    media.close()
+
+
+@respx.mock
+def test_export_with_core_writer_writes_control_source_and_outcomes(tmp_path):
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("av")
+    from avala.converters.lerobot_v3.reader import LeRobotV3Dataset
+
+    seq = _seq_with_sources(["policy", "teleop"], uid="seq1").model_dump(mode="json")
+    _wire_seq_routes(["seq1"], lambda *_: httpx.Response(200, json=seq))
+    respx.get(url__regex=re.escape(f"{BASE_URL}/datasets/o/s/sequences/seq1/outcome/") + r".*").mock(
+        return_value=httpx.Response(200, json=_outcome_json("seq1"))
+    )
+
+    client = Client(api_key="test-key")
+    with pytest.warns(UserWarning, match="perception-only"):
+        out = export_dataset(
+            client,
+            "o",
+            "s",
+            repo_id="u/d",
+            output_dir=tmp_path / "ds",
+            fps=10,
+            control_source_key="control.source",
+            include_outcomes=True,
+            backend="core",
+        )
+    client.close()
+
+    ds = LeRobotV3Dataset(out)
+    assert [f["annotation.avala.control_source"] for f in ds.iter_frames(0, decode_visual=False)] == [
+        "policy",
+        "teleop",
+    ]
+    rows = [json.loads(line) for line in (out / "meta/avala_sequence_outcomes.jsonl").read_text().splitlines()]
+    assert rows[0]["episode_index"] == 0 and rows[0]["outcome"] == "mistake_and_recovery"
+
+
+# ── outcome task text -> LeRobot's native per-frame task ──
+def test_outcome_task_text_reads_source_metadata():
+    from avala.types.sequence_outcome import SequenceOutcome
+
+    assert al.outcome_task_text(None) is None
+    labelled = SequenceOutcome.model_validate(_outcome_json("s", source_metadata={"task": "  stack the cups "}))
+    assert al.outcome_task_text(labelled) == "stack the cups"
+    alt = SequenceOutcome.model_validate(_outcome_json("s", source_metadata={"language_instruction": "open the door"}))
+    assert al.outcome_task_text(alt) == "open the door"
+    assert al.outcome_task_text(SequenceOutcome.model_validate(_outcome_json("s"))) is None
+
+
+@respx.mock
+def test_export_writes_outcome_task_as_lerobot_task(tmp_path):
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("av")
+    from avala.converters.lerobot_v3.reader import LeRobotV3Dataset
+
+    seq = _sequence(uid="x", n=2, n_cams=1).model_dump(mode="json")
+    _wire_seq_routes(["seq1", "seq2"], lambda *_: httpx.Response(200, json=seq))
+    respx.get(url__regex=re.escape(f"{BASE_URL}/datasets/o/s/sequences/seq1/outcome/") + r".*").mock(
+        return_value=httpx.Response(200, json=_outcome_json("seq1", source_metadata={"task": "stack the cups"}))
+    )
+    respx.get(url__regex=re.escape(f"{BASE_URL}/datasets/o/s/sequences/seq2/outcome/") + r".*").mock(
+        return_value=httpx.Response(200, json=_outcome_json("seq2"))
+    )
+
+    client = Client(api_key="test-key")
+    with pytest.warns(UserWarning, match="perception-only"):
+        out = export_dataset(
+            client,
+            "o",
+            "s",
+            repo_id="u/d",
+            output_dir=tmp_path / "ds",
+            task="default",
+            include_outcomes=True,
+            backend="core",
+        )
+    client.close()
+
+    ds = LeRobotV3Dataset(out)
+    assert [f["task"] for f in ds.iter_frames(0, decode_visual=False)] == ["stack the cups"] * 2
+    assert [f["task"] for f in ds.iter_frames(1, decode_visual=False)] == ["default"] * 2  # no task text: caller's
+    rows = [json.loads(line) for line in (out / "meta/avala_sequence_outcomes.jsonl").read_text().splitlines()]
+    assert [r["avala_sequence_uid"] for r in rows] == ["seq1", "seq2"]  # sidecar still written
+
+
+@respx.mock
+def test_export_ignores_outcome_task_unless_outcomes_requested(tmp_path):
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("av")
+    from avala.converters.lerobot_v3.reader import LeRobotV3Dataset
+
+    seq = _sequence(uid="x", n=1, n_cams=1).model_dump(mode="json")
+    _wire_seq_routes(["seq1"], lambda *_: httpx.Response(200, json=seq))
+    route = respx.get(url__regex=r".*/outcome/.*").mock(return_value=httpx.Response(500))
+    client = Client(api_key="test-key")
+    with pytest.warns(UserWarning, match="perception-only"):
+        out = export_dataset(client, "o", "s", repo_id="u/d", output_dir=tmp_path / "ds", task="t", backend="core")
+    client.close()
+    assert not route.called
+    assert [f["task"] for f in LeRobotV3Dataset(out).iter_frames(0, decode_visual=False)] == ["t"]

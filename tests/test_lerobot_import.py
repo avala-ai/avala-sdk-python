@@ -112,7 +112,17 @@ class _FakeMetadata:
         self.camera_keys = ["observation.images.cam"]
         self.fps = 10
         self.total_episodes = 1
-        self.features = {"observation.state": 1, "action": 1, "observation.images.cam": 1}
+        self.robot_type = "fake_bot"
+        self.info = {"codebase_version": "v3.0"}
+        self.features = {
+            "observation.images.cam": {"dtype": "video", "shape": (3, 8, 8), "names": None},
+            "observation.state": {"dtype": "float32", "shape": (3,), "names": None},
+            "action": {"dtype": "float32", "shape": (2,), "names": None},
+            "annotation.vendor.control_source": {"dtype": "string", "shape": (1,), "names": None},
+            "failure_type": {"dtype": "string", "shape": (1,), "names": None},
+            "timestamp": {"dtype": "float32", "shape": (1,), "names": None},
+            "episode_index": {"dtype": "int64", "shape": (1,), "names": None},
+        }
 
 
 class _FakeDataset:
@@ -129,6 +139,9 @@ class _FakeDataset:
             "observation.images.cam": np.zeros((3, 8, 8), dtype=np.uint8),  # CHW uint8
             "observation.state": np.array([0.1, 0.2, 0.3]),
             "action": np.array([1.0, 2.0]),
+            "annotation.vendor.control_source": ["policy", "teleop", "intervention"][i],
+            "failure_type": "none",
+            "task": "fold the towel",
             "timestamp": float(i) / 10.0,
             "episode_index": 0,
         }
@@ -226,3 +239,167 @@ def test_import_lerobot_rejects_out_of_range_episode(fake_lerobot):
     with pytest.raises(ValueError, match="out of range"):
         import_lerobot(client, repo_id="lerobot/x", name="L", slug="l", episodes=[-1])
     client.close()
+
+
+# ── torch-free core backend (no lerobot library) against the lerobot-written fixture ──
+REF = __import__("pathlib").Path(__file__).parent / "fixtures" / "lerobot_v3" / "ref_dataset"
+
+
+def _capture_mcaps(monkeypatch, client, dest):
+    """Replace the upload with a copy of the staged .mcap files into ``dest``."""
+    import shutil
+
+    from avala.types.dataset import Dataset
+
+    def _fake_create_from_local(*, source, name, slug, data_type, **_kwargs):
+        shutil.copytree(source, dest)
+        return Dataset(uid="d", name=name, slug=slug, data_type=data_type, item_count=0)
+
+    monkeypatch.setattr(client.datasets, "create_from_local", _fake_create_from_local)
+
+
+def _decoded(path):
+    from mcap.reader import make_reader
+    from mcap_protobuf.decoder import DecoderFactory
+
+    with open(path, "rb") as fh:
+        reader = make_reader(fh, decoder_factories=[DecoderFactory()])
+        return [(m.channel.topic, m.message.log_time, m.decoded_message) for m in reader.iter_decoded_messages()]
+
+
+def test_core_backend_imports_v3_without_lerobot(monkeypatch, tmp_path):
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("av")
+    monkeypatch.setitem(sys.modules, "lerobot", None)  # simulate: lerobot not installed
+    client = Client(api_key="test-key")
+    _capture_mcaps(monkeypatch, client, tmp_path / "out")
+
+    ds = import_lerobot(client, root=str(REF), name="Ref", slug="ref")
+    client.close()
+
+    assert ds.data_type == "mcap"
+    files = sorted(p.name for p in (tmp_path / "out").iterdir())
+    assert files == ["episode_000000.mcap", "episode_000001.mcap"]
+    messages = _decoded(tmp_path / "out" / "episode_000001.mcap")
+    state = [(t, list(m["data"])) for topic, t, m in messages if topic == "/observation/state"]
+    # Struct layout and topic name unchanged; values exact (float32 -> double is lossless)
+    assert [t for t, _ in state] == [0, 100_000_001, 200_000_002]
+    assert state[0][1] == [1.0, 1.25, 1.5, 1.75, 2.0, 2.25]
+    images = [m for topic, _, m in messages if topic == "/observation/images/top"]
+    assert len(images) == 3 and images[0].format == "jpeg"
+
+
+def test_backend_lerobot_without_library_errors(monkeypatch):
+    monkeypatch.setitem(sys.modules, "lerobot", None)
+    monkeypatch.setitem(sys.modules, "lerobot.datasets", None)
+    monkeypatch.setitem(sys.modules, "lerobot.datasets.lerobot_dataset", None)
+    with pytest.raises(ModuleNotFoundError, match=r"avala\[lerobot\]"):
+        import_lerobot(Client(api_key="k"), root=str(REF), name="x", slug="x", backend="lerobot")
+
+
+def test_unknown_backend_rejected():
+    with pytest.raises(ValueError, match="backend"):
+        import_lerobot(Client(api_key="k"), root=str(REF), name="x", slug="x", backend="torch")
+
+
+@respx.mock
+def test_library_backend_carries_extra_columns(fake_lerobot, monkeypatch, tmp_path):
+    client = Client(api_key="test-key")
+    _capture_mcaps(monkeypatch, client, tmp_path / "out")
+    import_lerobot(client, repo_id="lerobot/x", name="L", slug="l")
+    client.close()
+
+    messages = _decoded(tmp_path / "out" / "episode_000000.mcap")
+    by_topic = {}
+    for topic, _t, msg in messages:
+        by_topic.setdefault(topic, []).append(msg)
+    assert set(by_topic) == {
+        "/observation/images/cam",
+        "/observation/state",
+        "/action",
+        "/lerobot/control_source",
+        "/failure_type",
+        "/lerobot/task",
+    }
+    assert [m["data"] for m in by_topic["/lerobot/control_source"]] == ["policy", "teleop", "intervention"]
+    assert [m["data"] for m in by_topic["/failure_type"]] == ["none"] * 3
+    assert [m["data"] for m in by_topic["/lerobot/task"]] == ["fold the towel"] * 3
+    assert list(by_topic["/action"][0]["data"]) == [1.0, 2.0]  # unchanged Struct layout
+
+
+def test_core_backend_carries_every_fixture_column(monkeypatch, tmp_path):
+    pytest.importorskip("pyarrow")
+    pytest.importorskip("av")
+    import json
+
+    import pyarrow.parquet as pq
+    from mcap.reader import make_reader
+
+    client = Client(api_key="test-key")
+    _capture_mcaps(monkeypatch, client, tmp_path / "out")
+    import_lerobot(client, root=str(REF), name="Ref", slug="ref", backend="core")
+    client.close()
+
+    raw = pq.read_table(REF / "data/chunk-000/file-000.parquet").to_pylist()
+    for ep in (0, 1):
+        path = tmp_path / "out" / f"episode_{ep:06d}.mcap"
+        rows = [r for r in raw if r["episode_index"] == ep]
+        by_topic = {}
+        for topic, _t, msg in _decoded(path):
+            by_topic.setdefault(topic, []).append(msg)
+        assert set(by_topic) == {
+            "/observation/images/top",
+            "/observation/state",
+            "/action",
+            "/next/reward",
+            "/lerobot/control_source",
+            "/episode_uuid",
+            "/failure_type",
+            "/lerobot/task",
+        }
+        assert [m["data"] for m in by_topic["/lerobot/control_source"]] == [
+            r["annotation.vendor.control_source"] for r in rows
+        ]
+        assert [m["data"] for m in by_topic["/episode_uuid"]] == [r["episode_uuid"] for r in rows]
+        assert [m["data"] for m in by_topic["/failure_type"]] == [r["failure_type"] for r in rows]
+        assert [list(m["data"]) for m in by_topic["/next/reward"]] == [[r["next.reward"]] for r in rows]
+
+        with open(path, "rb") as fh:
+            records = {m.name: m.metadata for m in make_reader(fh).iter_metadata()}
+        meta = records["avala.lerobot"]
+        assert meta["episode_index"] == str(ep)
+        assert json.loads(meta["topics"])["annotation.vendor.control_source"] == "/lerobot/control_source"
+        info = json.loads((REF / "meta/info.json").read_text())
+        recorded = json.loads(meta["features"])
+        for key, spec in recorded.items():
+            assert spec["dtype"] == info["features"][key]["dtype"]
+            assert spec["shape"] == info["features"][key]["shape"]
+            assert spec["names"] == info["features"][key]["names"]
+
+
+@pytest.mark.parametrize("column", ["annotation.vendor_a.control_source", "annotation.vendor_b.control_source"])
+def test_core_import_accepts_any_vendor_control_source_column(monkeypatch, tmp_path, column):
+    pytest.importorskip("pyarrow")
+    from avala.converters.lerobot_v3.writer import LeRobotV3Writer
+
+    features = {
+        "observation.images.cam": {"dtype": "image", "shape": (3, 8, 8), "names": None},
+        column: {"dtype": "string", "shape": (1,), "names": None},
+    }
+    writer = LeRobotV3Writer.create(repo_id="a/b", fps=10, features=features, root=tmp_path / "src", use_videos=False)
+    for source in ("policy", "intervention", "teleop", "hold"):
+        writer.add_frame({"observation.images.cam": np.zeros((8, 8, 3), np.uint8), column: source, "task": "t"})
+    writer.save_episode()
+    writer.finalize()
+
+    client = Client(api_key="test-key")
+    _capture_mcaps(monkeypatch, client, tmp_path / "out")
+    import_lerobot(client, root=str(tmp_path / "src"), name="x", slug="x", backend="core")
+    client.close()
+    messages = _decoded(tmp_path / "out" / "episode_000000.mcap")
+    assert [m["data"] for topic, _t, m in messages if topic == "/lerobot/control_source"] == [
+        "policy",
+        "intervention",
+        "teleop",
+        "hold",
+    ]

@@ -92,6 +92,13 @@ def import_folder_cmd(
 @click.option("--owner", default=None, help="Dataset owner username or email")
 @click.option("--workers", type=int, default=8, help="Parallel upload threads (default: 8)")
 @click.option("--wait/--no-wait", "wait_after", default=False, help="Wait for indexing to finish")
+@click.option(
+    "--backend",
+    type=click.Choice(["auto", "lerobot", "core"]),
+    default="auto",
+    show_default=True,
+    help="Reader: the lerobot library, the torch-free core reader (v3 only), or auto (lerobot if installed)",
+)
 @click.pass_context
 def import_lerobot_cmd(
     ctx: click.Context,
@@ -105,12 +112,13 @@ def import_lerobot_cmd(
     owner: str | None,
     workers: int,
     wait_after: bool,
+    backend: str,
 ) -> None:
     """Import a LeRobot dataset (Hugging Face Hub or local) as an Avala MCAP dataset.
 
     Each episode becomes one .mcap file: camera streams as foxglove.CompressedImage,
-    proprioception (state/action) as protobuf Struct messages. Requires the 'lerobot'
-    extra: pip install 'avala[lerobot]'.
+    proprioception (state/action) as protobuf Struct messages. Requires either the
+    torch-free 'lerobot-core-video' extra (LeRobot v3 only) or the 'lerobot' extra.
     """
     from avala.importers import import_lerobot
 
@@ -130,6 +138,7 @@ def import_lerobot_cmd(
         owner_name=owner,
         workers=workers,
         wait=wait_after,
+        backend=backend,
     )
     click.echo(
         f"Dataset created: {dataset.uid} ({dataset.name}) — type={dataset.data_type}, items={dataset.item_count}"
@@ -144,6 +153,12 @@ def import_lerobot_cmd(
 @click.option("--owner", default=None, help="Dataset owner username or email")
 @click.option("--workers", type=int, default=8, help="Parallel upload threads (default: 8)")
 @click.option("--wait/--no-wait", "wait_after", default=False, help="Wait for server-side indexing to finish")
+@click.option(
+    "--images-only",
+    is_flag=True,
+    default=False,
+    help="Carry camera topics only (skip joint states and other numeric/text topics)",
+)
 @click.pass_context
 def import_rosbag_cmd(
     ctx: click.Context,
@@ -154,12 +169,15 @@ def import_rosbag_cmd(
     owner: str | None,
     workers: int,
     wait_after: bool,
+    images_only: bool,
 ) -> None:
     """Import a ROS bag (.bag / .db3) as an Avala MCAP dataset.
 
     Camera topics (sensor_msgs/Image, sensor_msgs/CompressedImage) are re-encoded as
-    foxglove.CompressedImage so they render in Mission Control. Non-image topics are
-    skipped this increment. Requires the 'rosbag' extra: pip install 'avala[rosbag]'.
+    foxglove.CompressedImage so they render in Mission Control. Joint states and other
+    numeric/text topics are carried as protobuf Struct messages; point clouds and other
+    binary payloads are skipped and listed. Requires the 'rosbag' extra:
+    pip install 'avala[rosbag]'.
     """
     from avala.importers import import_ros_bag
 
@@ -174,6 +192,7 @@ def import_rosbag_cmd(
         owner_name=owner,
         workers=workers,
         wait=wait_after,
+        carry_non_image=not images_only,
     )
     click.echo(
         f"Dataset created: {dataset.uid} ({dataset.name}) — type={dataset.data_type}, items={dataset.item_count}"

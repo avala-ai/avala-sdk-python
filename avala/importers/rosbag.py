@@ -5,10 +5,18 @@ Each bag becomes one ``.mcap`` (= one Avala MCAP episode). **Camera topics**
 re-encoded as ``foxglove.CompressedImage`` (protobuf) so they render in the Mission
 Control MCAP viewer.
 
-Scope (this increment): camera streams only. Non-image topics (point clouds, TF,
-joint states, …) are **not** carried over yet — the MC viewer renders protobuf image
-channels, and faithfully copying ROS-encoded messages through (preserving their
-schemas) is a planned follow-up. ``import_ros_bag`` reports how many topics it skipped.
+**Numeric and text topics** — ``sensor_msgs/JointState``, ``std_msgs/Float64``,
+``*MultiArray``, ``sensor_msgs/Imu``, ``geometry_msgs/*``, ``std_msgs/String`` and any
+other message made only of numbers, booleans, strings, small numeric arrays and nested
+messages of those — are carried on their original topic as a ``google.protobuf.Struct``
+mirroring the message's fields (``header``, ``name``, ``position``, ``velocity``,
+``effort`` for a JointState). Values are copied, never synthesised; ``Struct`` numbers
+are doubles, so integers above 2**53 lose precision.
+
+Everything else is **skipped and reported**: point clouds and other messages carrying a
+binary blob (a ``uint8``/``int8`` array of more than 256 bytes), messages with more than
+4096 numeric values, and depth/unsupported images. ``carry_non_image=False`` restores
+the camera-only behaviour.
 
 Reading uses the pure-Python ``rosbags`` library (no ROS install). Install the extra
 with ``pip install 'avala[rosbag]'``.
@@ -24,12 +32,65 @@ if TYPE_CHECKING:
     from avala._client import Client
     from avala.types.dataset import Dataset
 
-__all__ = ["import_ros_bag", "write_bag_mcap"]
+__all__ = ["convert_bag", "import_ros_bag", "write_bag_mcap"]
 
 # ROS1 (``pkg/Type``) and ROS2 (``pkg/msg/Type``) image message names.
 _RAW_IMAGE_TYPES = frozenset({"sensor_msgs/Image", "sensor_msgs/msg/Image"})
 _COMPRESSED_IMAGE_TYPES = frozenset({"sensor_msgs/CompressedImage", "sensor_msgs/msg/CompressedImage"})
 _IMAGE_TYPES = _RAW_IMAGE_TYPES | _COMPRESSED_IMAGE_TYPES
+
+
+# Guards for carrying arbitrary messages as Struct: a byte array this long is a binary blob
+# (point cloud, serialized payload), not a numeric signal; beyond this many numbers per
+# message a Struct is the wrong container.
+_MAX_BYTE_ARRAY = 256
+_MAX_NUMBERS_PER_MESSAGE = 4096
+
+
+class _NotCarried(ValueError):
+    """The message cannot be represented faithfully as a Struct."""
+
+
+def _msg_to_struct(msg: Any) -> Any:
+    """Convert a deserialized ROS message to Struct-compatible Python values (dict tree).
+
+    Raises :class:`_NotCarried` for binary blobs and oversized messages.
+    """
+    budget = [_MAX_NUMBERS_PER_MESSAGE]
+
+    def spend(n: int) -> None:
+        budget[0] -= n
+        if budget[0] < 0:
+            raise _NotCarried(f"more than {_MAX_NUMBERS_PER_MESSAGE} numeric values")
+
+    def convert(value: Any) -> Any:
+        if isinstance(value, (bool, str)) or value is None:
+            return value
+        if isinstance(value, (int, float)):
+            spend(1)
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            raise _NotCarried("binary payload")
+        if hasattr(value, "dtype") and hasattr(value, "tolist"):  # numpy array / scalar
+            kind = value.dtype.kind
+            if kind not in "biuf":
+                raise _NotCarried(f"array of dtype {value.dtype}")
+            size = int(getattr(value, "size", 1))
+            if value.dtype.itemsize == 1 and kind in "iu" and size > _MAX_BYTE_ARRAY:
+                raise _NotCarried("binary blob")
+            spend(size)
+            return value.tolist()
+        if isinstance(value, (list, tuple)):
+            return [convert(v) for v in value]
+        fields = getattr(value, "__dataclass_fields__", None)
+        if fields is not None:
+            return {name: convert(getattr(value, name)) for name in fields if not name.startswith("__")}
+        raise _NotCarried(f"unsupported field type {type(value).__name__}")
+
+    out = convert(msg)
+    if not isinstance(out, dict):
+        raise _NotCarried("not a message")
+    return out
 
 
 _BYTES_PER_PIXEL = {"rgb8": 3, "bgr8": 3, "rgba8": 4, "bgra8": 4, "mono8": 1, "mono16": 2}
@@ -104,26 +165,58 @@ def write_bag_mcap(
     bag_path: str,
     *,
     image_topics: Optional[Sequence[str]] = None,
+    carry_non_image: bool = True,
 ) -> Tuple[int, Set[str]]:
-    """Convert the camera topics of a ROS bag to a foxglove ``.mcap``.
+    """Convert a ROS bag to a foxglove ``.mcap``.
 
-    Returns ``(images_written, skipped_topics)``. ``image_topics`` restricts the
-    conversion to specific topics (default: all image topics).
+    Returns ``(images_written, skipped_topics)``. ``image_topics`` restricts the camera
+    conversion to specific topics (default: all image topics). Numeric/text topics are
+    carried as ``Struct`` (see the module docstring) unless ``carry_non_image=False``;
+    :func:`convert_bag` also returns how many of those messages were written.
     """
+    images, _structs, skipped = convert_bag(
+        out_path, bag_path, image_topics=image_topics, carry_non_image=carry_non_image
+    )
+    return images, skipped
+
+
+def convert_bag(
+    out_path: str,
+    bag_path: str,
+    *,
+    image_topics: Optional[Sequence[str]] = None,
+    carry_non_image: bool = True,
+) -> Tuple[int, int, Set[str]]:
+    """Like :func:`write_bag_mcap`; returns ``(images_written, structs_written, skipped_topics)``."""
     from pathlib import Path
 
     from foxglove_schemas_protobuf.CompressedImage_pb2 import CompressedImage
+    from google.protobuf.struct_pb2 import Struct
     from mcap_protobuf.writer import Writer
     from rosbags.highlevel import AnyReader
 
     wanted = set(image_topics) if image_topics is not None else None
     written = 0
+    structs = 0
     skipped: Set[str] = set()
 
     with AnyReader([Path(bag_path)]) as reader, open(out_path, "wb") as fh, Writer(fh) as writer:
         for conn, timestamp, raw in reader.messages():
             if conn.msgtype not in _IMAGE_TYPES:
-                skipped.add(conn.topic)
+                if not carry_non_image or conn.topic in skipped:
+                    skipped.add(conn.topic)
+                    continue
+                try:
+                    payload_dict = _msg_to_struct(reader.deserialize(raw, conn.msgtype))
+                except _NotCarried:
+                    skipped.add(conn.topic)
+                    continue
+                struct = Struct()
+                struct.update(payload_dict)
+                writer.write_message(
+                    topic=conn.topic, message=struct, log_time=int(timestamp), publish_time=int(timestamp)
+                )
+                structs += 1
                 continue
             if wanted is not None and conn.topic not in wanted:
                 continue
@@ -161,7 +254,7 @@ def write_bag_mcap(
             )
             written += 1
 
-    return written, skipped
+    return written, structs, skipped
 
 
 def import_ros_bag(
@@ -179,12 +272,15 @@ def import_ros_bag(
     on_progress: "Optional[Callable[[str, int], None]]" = None,
     wait: bool = False,
     wait_timeout: float = 3600.0,
+    carry_non_image: bool = True,
 ) -> "Dataset":
     """Import a ROS bag (``.bag`` / ``.db3``) into Avala as an MCAP dataset.
 
-    Camera topics are re-encoded as ``foxglove.CompressedImage`` and written to a single
-    ``.mcap`` that is uploaded with ``data_type="mcap"``. Non-image topics are skipped
-    (a warning lists them). ``image_topics`` restricts the conversion to specific topics.
+    Camera topics are re-encoded as ``foxglove.CompressedImage``; numeric/text topics
+    (joint states, IMU, scalars, strings, ...) are carried as ``Struct`` unless
+    ``carry_non_image=False``. Everything goes into a single ``.mcap`` uploaded with
+    ``data_type="mcap"``; topics that could not be carried are listed in a warning.
+    ``image_topics`` restricts the camera conversion to specific topics.
     """
     import os
     import tempfile
@@ -201,17 +297,19 @@ def import_ros_bag(
         # Fixed filename — never derive the local path from the user-facing slug (which
         # could contain '/', '..', or an absolute path and escape the temp dir).
         out_path = os.path.join(tmp, "data.mcap")
-        written, skipped = write_bag_mcap(out_path, bag, image_topics=image_topics)
-        if written == 0:
-            detail = f" Skipped topics (non-image or unsupported): {sorted(skipped)}." if skipped else ""
+        written, structs, skipped = convert_bag(
+            out_path, bag, image_topics=image_topics, carry_non_image=carry_non_image
+        )
+        if written == 0 and structs == 0:
+            detail = f" Skipped topics (unsupported or binary): {sorted(skipped)}." if skipped else ""
             raise ValueError(
-                "no camera images found in the bag; this importer carries camera topics "
-                "(sensor_msgs/Image, sensor_msgs/CompressedImage) only." + detail
+                "no camera images or numeric topics found in the bag; this importer carries camera "
+                "topics (sensor_msgs/Image, sensor_msgs/CompressedImage) and numeric/text messages." + detail
             )
         if skipped:
             warnings.warn(
-                f"skipped {len(skipped)} topic(s) not carried over (non-image, or unsupported "
-                f"image format such as compressedDepth): {sorted(skipped)}",
+                f"skipped {len(skipped)} topic(s) not carried over (binary payloads such as point clouds, "
+                f"oversized messages, or unsupported image formats such as compressedDepth): {sorted(skipped)}",
                 stacklevel=2,
             )
         return client.datasets.create_from_local(
