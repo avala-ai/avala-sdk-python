@@ -21,7 +21,7 @@ against a dataset that library wrote (``tests/fixtures/lerobot_v3/ref_dataset``)
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Tuple
 
 CODEBASE_VERSION = "v3.0"
 
@@ -60,3 +60,51 @@ VISUAL_DTYPES = frozenset({"image", "video"})
 def format_path(template: str, **kwargs: object) -> str:
     """Fill one of the path templates above (thin wrapper so callers read uniformly)."""
     return template.format(**kwargs)
+
+
+# Image/video features declare a 3-D ``shape`` whose channel axis is NOT fixed by the
+# format. lerobot 0.5.1 accepts both layouts (``feature_utils.py:479-500``,
+# ``validate_feature_image_or_video`` takes ``(c, h, w)`` or ``(h, w, c)``) and itself
+# writes channels-LAST for camera features (``feature_utils.py:129-134``,
+# ``hw_to_dataset_features``: ``"names": ["height", "width", "channels"]``). Hub datasets
+# such as ``lerobot/pusht`` declare ``[96, 96, 3]`` with ``["height", "width", "channel"]``.
+# So the channel axis is read from ``names``; the shape itself is never rewritten.
+_CHANNEL_AXIS_NAMES = frozenset({"channel", "channels", "c", "rgb", "color", "colour"})
+_CHANNEL_SIZES = frozenset({1, 3, 4})
+# What a newly inferred camera feature declares: lerobot's own convention (see above).
+INFERRED_IMAGE_NAMES: Tuple[str, str, str] = ("height", "width", "channels")
+
+
+def image_channel_axis(spec: Mapping[str, Any]) -> int:
+    """Index of the channel axis in an image/video feature's 3-D ``shape``.
+
+    Taken from ``names`` when it names exactly one channel axis; otherwise the single
+    outer axis (0 or 2) of size 3 — or, failing that, of size 1 or 4. Ambiguous shapes raise instead of
+    guessing, because a wrong guess silently swaps height, width and channels.
+    """
+    shape = [int(x) for x in spec["shape"]]
+    if len(shape) != 3:
+        raise ValueError(f"image/video features need a 3-D shape, got {shape}")
+    names = spec.get("names")
+    if isinstance(names, (list, tuple)) and len(names) == 3:
+        hits = [i for i, n in enumerate(names) if str(n).strip().lower() in _CHANNEL_AXIS_NAMES]
+        if len(hits) == 1:
+            return hits[0]
+    # RGB (3) first: frames are always written as RGB, so [3, 4, 4] is CHW, not RGBA HWC.
+    for sizes in ({3}, _CHANNEL_SIZES):
+        candidates = [i for i in (0, 2) if shape[i] in sizes]
+        if len(candidates) == 1:
+            return candidates[0]
+        if candidates:
+            break
+    raise ValueError(
+        f"cannot tell the channel axis of image shape {shape} (names={names!r}); "
+        "declare names such as ['height', 'width', 'channels'] or ['channels', 'height', 'width']"
+    )
+
+
+def image_hw(spec: Mapping[str, Any]) -> Tuple[int, int]:
+    """``(height, width)`` of an image/video feature, whichever axis holds the channels."""
+    axis = image_channel_axis(spec)
+    height, width = [int(x) for i, x in enumerate(spec["shape"]) if i != axis]
+    return height, width

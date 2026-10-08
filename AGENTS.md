@@ -92,3 +92,13 @@ Verified against `inspect-robots` 0.60.0; the module docstring has the full mapp
   version; `test_every_sent_field_takes_part_in_the_rerun_comparison` fails when one is missed.
 - **Regenerate the fixture with Inspect Robots, never by hand:**
   `tests/fixtures/inspect_robots/generate_fixture.py` (needs Python 3.10+).
+
+## LeRobot image shapes: the channel axis is declared, not fixed
+
+LeRobot v3 accepts camera features as `(C, H, W)` or `(H, W, C)`, and Hub data and lerobot
+0.5.1 itself write channels-LAST (`lerobot/pusht`: `[96, 96, 3]`,
+`["height", "width", "channel"]`). Never unpack an image `shape` positionally: use
+`_layout.image_hw` / `image_channel_axis`, which read `names` and refuse an ambiguous
+unnamed shape. Round trips must preserve the declared `shape` and `names` exactly; pinned
+by `tests/test_lerobot_v3_channels_last.py` against the real-lerobot fixture
+`tests/fixtures/lerobot_v3/ref_dataset_hwc`.

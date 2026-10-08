@@ -71,6 +71,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 
+from avala.converters.lerobot_v3._layout import image_hw
 from avala.converters.lerobot_v3.mcap import DEFAULT_CONTROL_SOURCE_COLUMN
 
 if TYPE_CHECKING:
@@ -230,8 +231,7 @@ def _expected_from_features(
     cam_hw: Dict[str, Tuple[int, int]] = {}
     for key, spec in features.items():
         if key.startswith(_IMG_PREFIX):
-            _, height, width = spec["shape"]
-            cam_hw[key[len(_IMG_PREFIX) :]] = (int(height), int(width))
+            cam_hw[key[len(_IMG_PREFIX) :]] = image_hw(spec)
     state_dim = features["observation.state"]["shape"][0] if "observation.state" in features else None
     action_dim = features["action"]["shape"][0] if "action" in features else None
     return cam_hw, state_dim, action_dim

@@ -300,6 +300,11 @@ def _is_command(topic: str) -> bool:
     return any(token in lowered for token in _COMMAND_TOKENS)
 
 
+def _inferred_image_spec(height: int, width: int) -> Dict[str, Any]:
+    """A camera feature the way lerobot itself declares one: channels-last, axes named."""
+    return {"dtype": "video", "shape": [height, width, 3], "names": list(L.INFERRED_IMAGE_NAMES)}
+
+
 def _infer_schema(ep: _Episode) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Source]]:
     """Features + feature->(topic, joint field) for an MCAP without our metadata record."""
     features: Dict[str, Dict[str, Any]] = {}
@@ -319,11 +324,11 @@ def _infer_schema(ep: _Episode) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, So
         if isinstance(first, _VideoPacket):
             decoder = _PacketDecoder([p for _, p in values], first.fmt)
             img = decoder.frame(0)
-            shape = [3, int(img.shape[0]), int(img.shape[1])]
-            add(_infer_name(topic, image=True), {"dtype": "video", "shape": shape, "names": None}, (topic, None))
+            spec = _inferred_image_spec(int(img.shape[0]), int(img.shape[1]))
+            add(_infer_name(topic, image=True), spec, (topic, None))
         elif isinstance(first, tuple):
             height, width = _image_shape(first)
-            spec = {"dtype": "video", "shape": [3, height, width], "names": None}
+            spec = _inferred_image_spec(height, width)
             add(_infer_name(topic, image=True), spec, (topic, None))
         elif isinstance(first, _Joint):
             joint_topics.append(topic)

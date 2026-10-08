@@ -108,7 +108,11 @@ def _normalize_features(features: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[s
         shape = [int(x) for x in spec["shape"]]
         if dtype in L.VISUAL_DTYPES:
             if len(shape) != 3:
-                raise ValueError(f"{key!r}: {dtype} features need a (C, H, W) shape, got {shape}")
+                raise ValueError(f"{key!r}: {dtype} features need a 3-D (C, H, W) or (H, W, C) shape, got {shape}")
+            try:
+                L.image_channel_axis(spec)
+            except ValueError as exc:
+                raise ValueError(f"{key!r}: {exc}") from exc
         elif dtype == "string":
             if shape != [1]:
                 raise ValueError(f"{key!r}: string features must have shape (1,), got {shape}")
@@ -419,7 +423,7 @@ class LeRobotV3Writer:
         dtype = spec["dtype"]
         if dtype in L.VISUAL_DTYPES:
             arr = to_rgb(to_hwc_uint8(value))
-            _, height, width = spec["shape"]
+            height, width = L.image_hw(spec)
             if arr.shape[:2] != (height, width):
                 raise ValueError(f"{key!r}: frame is {arr.shape[1]}x{arr.shape[0]}, feature declares {width}x{height}")
             return arr
