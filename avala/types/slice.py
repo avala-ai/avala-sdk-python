@@ -29,6 +29,8 @@ class SliceItem(BaseModel):
     dataset: Optional[str] = None
     dataset_owner_name: Optional[str] = None
     dataset_slug: Optional[str] = None
+    # Detail-only; list and older responses may omit this read-only field.
+    masks_fingerprint: Optional[str] = None
     url: Optional[str] = None
     gpu_texture_url: Optional[str] = None
     thumbnails: Optional[List[str]] = None
