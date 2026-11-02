@@ -909,7 +909,13 @@ class Datasets(BaseSyncResource):
                         organization_uid=organization_uid,
                         **({"dataset_upload_uid": dataset_upload_uid} if dataset_upload_uid is not None else {}),
                     )
-                    if dataset_upload_uid is not None and info.get("method") in {"PUT", "MULTIPART"}:
+                    # A managed session (v2) carries an ``upload_uid``. A bucket served from R2 also answers
+                    # ``method: PUT`` for the legacy protocol, but with no session: that is one raw PUT, below.
+                    if (
+                        dataset_upload_uid is not None
+                        and info.get("method") in {"PUT", "MULTIPART"}
+                        and info.get("upload_uid") is not None
+                    ):
                         from avala._managed_upload import transfer_managed_upload
 
                         bind_managed_source(_STATE_DIR, dataset_upload_uid, relative, file_stamp(local_path))
@@ -928,6 +934,37 @@ class Datasets(BaseSyncResource):
                             on_sent=record_sent,
                         )
                         transferred_bytes = managed_sent[0]
+                    elif info.get("method") == "PUT":
+                        validate_presigned_url(info["url"])
+                        if stop.is_set():
+                            return 0
+                        # R2 has no presigned POST. The grant is a PUT whose headers are part of the
+                        # signature: send the raw file with exactly those, and nothing else.
+                        put_headers = {str(k): str(v) for k, v in (info.get("headers") or {}).items()}
+                        granted_length = next(
+                            (v for k, v in put_headers.items() if k.lower() == "content-length"), None
+                        )
+                        if granted_length is not None and granted_length != str(size):
+                            raise ValueError(
+                                f"{relative}: the server granted Content-Length {granted_length} for a "
+                                f"{size}-byte request."
+                            )
+                        put_headers = {k: v for k, v in put_headers.items() if k.lower() != "content-length"}
+                        # Explicit: httpx streams a file object chunked, and the signed length must be sent.
+                        put_headers["Content-Length"] = str(size)
+                        with open(local_path, "rb") as fh:
+                            resp = httpx.put(
+                                info["url"],
+                                headers=put_headers,
+                                content=fh,
+                                timeout=httpx.Timeout(
+                                    connect=_UPLOAD_TIMEOUTS[0],
+                                    read=_UPLOAD_TIMEOUTS[1],
+                                    write=_UPLOAD_TIMEOUTS[2],
+                                    pool=_UPLOAD_TIMEOUTS[3],
+                                ),
+                            )
+                            resp.raise_for_status()
                     else:
                         if info.get("method", "POST") != "POST":
                             raise ValueError("Unsupported managed upload method.")

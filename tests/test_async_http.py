@@ -13,6 +13,7 @@ from avala.errors import (
     NotFoundError,
     RateLimitError,
     ServerError,
+    StorageWriteFrozen,
     ValidationError,
 )
 from avala.types.dataset import Dataset
@@ -124,6 +125,19 @@ async def test_async_429_raises_rate_limit_error_with_retry_after():
     with pytest.raises(RateLimitError) as exc_info:
         await transport.request_page("/datasets/", Dataset)
     assert exc_info.value.retry_after == 45.0
+    await transport.close()
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_async_409_s3_write_frozen_raises_storage_write_frozen():
+    respx.get(f"{BASE_URL}/datasets/").mock(
+        return_value=httpx.Response(409, json={"code": "s3_write_frozen"}, headers={"Retry-After": "30"})
+    )
+    transport = make_transport()
+    with pytest.raises(StorageWriteFrozen) as exc_info:
+        await transport.request_page("/datasets/", Dataset)
+    assert exc_info.value.retry_after == 30.0
     await transport.close()
 
 

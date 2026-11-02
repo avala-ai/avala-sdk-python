@@ -14,6 +14,7 @@ from avala.errors import (
     NotFoundError,
     RateLimitError,
     ServerError,
+    StorageWriteFrozen,
     ValidationError,
 )
 from avala.types.dataset import Dataset
@@ -212,6 +213,49 @@ class TestErrorHandling:
         with pytest.raises(AvalaError) as exc_info:
             transport.request_page("/datasets/", Dataset)
         assert exc_info.value.status_code == 409
+        transport.close()
+
+
+class TestStorageWriteFrozen:
+    """409 {"code": "s3_write_frozen"} is the S3 to R2 migration pause: transient, and its own type."""
+
+    @respx.mock
+    def test_409_s3_write_frozen_raises_storage_write_frozen(self):
+        respx.get(f"{BASE_URL}/datasets/").mock(
+            return_value=httpx.Response(
+                409,
+                json={"code": "s3_write_frozen", "detail": "Uploads and saves are paused during a storage migration."},
+                headers={"Retry-After": "30"},
+            )
+        )
+        transport = make_transport()
+        with pytest.raises(StorageWriteFrozen) as exc_info:
+            transport.request_page("/datasets/", Dataset)
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.retry_after == 30.0
+        assert isinstance(exc_info.value, AvalaError)
+        transport.close()
+
+    @respx.mock
+    def test_retry_after_is_optional_and_tolerates_garbage(self):
+        respx.get(f"{BASE_URL}/datasets/").mock(
+            return_value=httpx.Response(
+                409, json={"code": "s3_write_frozen"}, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}
+            )
+        )
+        transport = make_transport()
+        with pytest.raises(StorageWriteFrozen) as exc_info:
+            transport.request_page("/datasets/", Dataset)
+        assert exc_info.value.retry_after is None
+        transport.close()
+
+    @respx.mock
+    def test_other_409_stays_a_plain_avala_error(self):
+        respx.get(f"{BASE_URL}/datasets/").mock(return_value=httpx.Response(409, json={"code": "T4E9X"}))
+        transport = make_transport()
+        with pytest.raises(AvalaError) as exc_info:
+            transport.request_page("/datasets/", Dataset)
+        assert not isinstance(exc_info.value, StorageWriteFrozen)
         transport.close()
 
 

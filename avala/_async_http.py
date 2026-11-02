@@ -18,6 +18,7 @@ from avala.errors import (
     NotFoundError,
     RateLimitError,
     ServerError,
+    StorageWriteFrozen,
     ValidationError,
 )
 
@@ -133,6 +134,13 @@ class AsyncHTTPTransport:
                 body,
                 retry_after=float(retry_after) if retry_after else None,
             )
+        if status == 409 and isinstance(body, dict) and body.get("code") == "s3_write_frozen":
+            retry_after_header = response.headers.get("Retry-After")
+            try:
+                frozen_retry_after = float(retry_after_header) if retry_after_header else None
+            except ValueError:
+                frozen_retry_after = None
+            raise StorageWriteFrozen(message, status, body, retry_after=frozen_retry_after)
         if status == 413:
             # Only when the body is actually shaped like a quota refusal. A 413
             # from a reverse proxy, or from any endpoint that simply got too

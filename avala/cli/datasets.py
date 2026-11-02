@@ -614,7 +614,7 @@ def upload_dataset(
     """Upload local files to Avala-managed dataset storage and create a dataset."""
     import os
 
-    from avala.errors import QuotaExceededError
+    from avala.errors import QuotaExceededError, StorageWriteFrozen
     from avala.resources.datasets import _STATE_DIR, clear_completed, gather_local_files
 
     try:
@@ -717,6 +717,13 @@ def upload_dataset(
         if exc.limit is not None and exc.used is not None:
             detail = f" ({human_bytes(exc.used)} of {human_bytes(exc.limit)} already used)"
         raise click.ClickException(f"Storage quota exceeded{detail}. Free space or request a higher cap.")
+    except StorageWriteFrozen as exc:
+        # A temporary pause for the S3 to R2 migration, not a problem with the files or the key.
+        wait = f" in about {int(exc.retry_after)} seconds" if exc.retry_after else " shortly"
+        raise click.ClickException(
+            f"Uploads are paused for a storage migration. Re-run the same command{wait}; "
+            "what already uploaded is kept and will be skipped."
+        )
     except Exception as exc:
         # Resume state is intact — say so, because the natural next move is to
         # re-run the identical command rather than start over.

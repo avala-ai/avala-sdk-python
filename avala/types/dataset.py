@@ -62,6 +62,8 @@ class DatasetSequence(BaseModel):
     crop_data: Optional[Dict[str, Any]] = None
     predefined_labels: Optional[List[Dict[str, Any]]] = None
     frames: Optional[List[Dict[str, Any]]] = None
+    # Detail-only discovery descriptor; list and older responses may omit it.
+    annotation_storage: Optional[Dict[str, Any]] = None
     metrics: Optional[Dict[str, Any]] = None
     dataset_uid: Optional[str] = None
     dataset_data_type: Optional[str] = None

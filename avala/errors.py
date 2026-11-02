@@ -79,6 +79,27 @@ class QuotaExceededError(AvalaError):
         self.used = used
 
 
+class StorageWriteFrozen(AvalaError):
+    """Raised on a 409 ``{"code": "s3_write_frozen"}``: writes are paused for a storage migration.
+
+    The server refuses upload grants (and other storage writes) while Avala-owned S3 buckets are being
+    cut over to R2, and answers with ``Retry-After``. Nothing is wrong with the request or the local
+    files: the pause is temporary, so uploads are NOT retried in a tight loop (an upload would burn its
+    whole retry budget inside the window). Re-run the same command shortly; resumable uploads keep
+    what already landed. ``retry_after`` is the server's hint in seconds, when it sent one.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 409,
+        body: Any = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message, status_code, body)
+        self.retry_after = retry_after
+
+
 class UploadStateError(AvalaError):
     """Raised when persisted resume state exists but cannot be trusted."""
 

@@ -130,6 +130,99 @@ def test_datasets_upload_passes_organization_uid_end_to_end():
     )
 
 
+R2_PUT_URL = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/bucket/orgs/acme/DS/frame.jpg?sig=1"
+
+
+@respx.mock
+def test_datasets_upload_puts_to_r2_under_protocol_v2_without_a_managed_session():
+    """A remapped bucket answers the v2 presign with ``method: PUT`` and a ``dataset_upload_uid`` but NO
+    ``upload_uid``. That is one raw PUT, not a managed session (which would need ``upload_uid``)."""
+    presign = respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/file-upload-url/").mock(
+        side_effect=lambda request: httpx.Response(
+            200,
+            json={
+                "method": "PUT",
+                "url": R2_PUT_URL,
+                "fields": {},
+                "headers": {"Content-Type": "image/jpeg", "Content-Length": "5"},
+                "key": "orgs/acme/DS/frame.jpg",
+                "object_key": "orgs/acme/DS/frame.jpg",
+                "dataset_upload_uid": json.loads(request.content)["dataset_upload_uid"],
+            },
+        )
+    )
+    put = respx.put(R2_PUT_URL).mock(return_value=httpx.Response(200))
+    create = respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/").mock(
+        return_value=httpx.Response(
+            201, json={"uid": "d1", "name": "DS", "slug": "ds", "item_count": 1, "data_type": "image"}
+        )
+    )
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("frame.jpg", "wb") as fh:
+            fh.write(b"image")
+        result = runner.invoke(
+            main,
+            [
+                "--api-key",
+                "test-key",
+                "datasets",
+                "upload",
+                "--source",
+                "frame.jpg",
+                "--name",
+                "DS",
+                "--slug",
+                "ds",
+                "--data-type",
+                "image",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert presign.call_count == 1
+    assert put.call_count == 1
+    assert put.calls[0].request.content == b"image"
+    assert create.call_count == 1
+
+
+@respx.mock
+def test_datasets_upload_reports_a_storage_migration_pause_and_does_not_retry():
+    presign = respx.post("https://api.avala.ai/api/v1/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            409, json={"code": "s3_write_frozen", "detail": "paused"}, headers={"Retry-After": "30"}
+        )
+    )
+
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("frame.jpg", "wb") as fh:
+            fh.write(b"image")
+        result = runner.invoke(
+            main,
+            [
+                "--api-key",
+                "test-key",
+                "datasets",
+                "upload",
+                "--source",
+                "frame.jpg",
+                "--name",
+                "DS",
+                "--slug",
+                "ds",
+                "--data-type",
+                "image",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "paused for a storage migration" in result.output
+    assert "30 seconds" in result.output
+    assert presign.call_count == 1
+
+
 def test_datasets_upload_rejects_legacy_storage_config():
     runner = CliRunner()
     with runner.isolated_filesystem():

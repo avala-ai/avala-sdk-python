@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 from avala import Client
-from avala.errors import QuotaExceededError
+from avala.errors import QuotaExceededError, StorageWriteFrozen
 
 BASE_URL = "https://api.avala.ai/api/v1"
 
@@ -433,6 +433,164 @@ def test_presign_quota_rejection_raises_quota_exceeded(tmp_path):
 
     assert excinfo.value.limit == 100
     assert excinfo.value.used == 99
+
+
+R2_HOST = "0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com"
+
+
+@respx.mock
+def test_upload_files_puts_the_raw_file_when_the_grant_is_a_put(tmp_path):
+    """A bucket served from R2 answers the legacy presign with ``method: PUT`` (no ``upload_uid``).
+
+    Contract (reports/infrastructure/r2-migration/presigned-put-grants.md): the file is the raw body of one
+    request to ``url`` with exactly the signed ``headers``. No multipart, no ``fields``.
+    """
+    payload = b"x" * 16
+    (tmp_path / "a.mcap").write_bytes(payload)
+    presign = respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "method": "PUT",
+                "url": f"https://{R2_HOST}/bucket/orgs/acme/N/a.mcap?X-Amz-Signature=sig",
+                "fields": {},
+                "headers": {"Content-Type": "application/octet-stream", "Content-Length": "16", "Cache-Control": "p"},
+                "key": "orgs/acme/N/a.mcap",
+            },
+        )
+    )
+    put = respx.put(url__regex=rf"https://{R2_HOST}/bucket/orgs/acme/N/a\.mcap.*").mock(
+        return_value=httpx.Response(200)
+    )
+    legacy_post = respx.post(url__regex=rf"https://{R2_HOST}/.*").mock(return_value=httpx.Response(500))
+
+    client = Client(api_key="test-key")
+    sent = client.datasets.upload_files(dataset_name="N", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert sent == 16
+    assert presign.call_count == 1
+    assert put.call_count == 1
+    assert not legacy_post.called
+    request = put.calls.last.request
+    assert request.content == payload
+    assert request.headers["Content-Type"] == "application/octet-stream"
+    assert request.headers["Content-Length"] == "16"
+    assert request.headers["Cache-Control"] == "p"
+    assert "multipart" not in request.headers["Content-Type"]
+
+
+@respx.mock
+def test_upload_files_put_grant_rejection_is_not_silent(tmp_path):
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "method": "PUT",
+                "url": f"https://{R2_HOST}/bucket/k?X-Amz-Signature=sig",
+                "fields": {},
+                "headers": {"Content-Length": "16"},
+                "key": "k",
+            },
+        )
+    )
+    put = respx.put(url__regex=rf"https://{R2_HOST}/bucket/k.*").mock(return_value=httpx.Response(403))
+
+    client = Client(api_key="test-key")
+    with pytest.raises(httpx.HTTPStatusError):
+        client.datasets.upload_files(dataset_name="N", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert put.call_count == 1  # a 403 is not retryable
+
+
+@respx.mock
+def test_upload_files_put_grant_for_another_size_is_refused_before_sending(tmp_path):
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "method": "PUT",
+                "url": f"https://{R2_HOST}/bucket/k?X-Amz-Signature=sig",
+                "fields": {},
+                "headers": {"Content-Length": "999"},
+                "key": "k",
+            },
+        )
+    )
+    put = respx.put(url__regex=rf"https://{R2_HOST}/.*").mock(return_value=httpx.Response(200))
+
+    client = Client(api_key="test-key")
+    with pytest.raises(ValueError, match="granted Content-Length"):
+        client.datasets.upload_files(dataset_name="N", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert not put.called
+
+
+@respx.mock
+def test_upload_files_put_grant_to_an_untrusted_host_is_refused(tmp_path):
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"method": "PUT", "url": "https://evil.example/k", "fields": {}, "headers": {}, "key": "k"},
+        )
+    )
+    put = respx.put("https://evil.example/k").mock(return_value=httpx.Response(200))
+
+    client = Client(api_key="test-key")
+    with pytest.raises(ValueError, match="allow-list"):
+        client.datasets.upload_files(dataset_name="N", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert not put.called
+
+
+@respx.mock
+def test_upload_files_post_grant_is_unchanged(tmp_path):
+    """A response without ``method`` (or ``POST``) is still the multipart form POST."""
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"method": "POST", "url": "https://s3.us-east-1.amazonaws.com/u", "fields": {"key": "k"}},
+        )
+    )
+    post = respx.post("https://s3.us-east-1.amazonaws.com/u").mock(return_value=httpx.Response(204))
+
+    client = Client(api_key="test-key")
+    client.datasets.upload_files(dataset_name="N", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert post.call_count == 1
+    assert post.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
+
+
+@respx.mock
+def test_upload_files_is_not_retried_while_storage_writes_are_frozen(tmp_path):
+    """409 s3_write_frozen is a pause, not a failure of the file: one presign, then StorageWriteFrozen.
+
+    The retry loop would otherwise spend all ``MAX_RETRIES`` attempts inside the freeze window.
+    """
+    (tmp_path / "a.mcap").write_bytes(b"x" * 16)
+    presign = respx.post(f"{BASE_URL}/datasets/manual-upload/file-upload-url/").mock(
+        return_value=httpx.Response(
+            409,
+            json={"code": "s3_write_frozen", "detail": "Uploads and saves are paused during a storage migration."},
+            headers={"Retry-After": "30"},
+        )
+    )
+
+    client = Client(api_key="test-key")
+    with pytest.raises(StorageWriteFrozen) as excinfo:
+        client.datasets.upload_files(dataset_name="N", files=[(str(tmp_path / "a.mcap"), "a.mcap")], workers=1)
+    client.close()
+
+    assert presign.call_count == 1
+    assert excinfo.value.retry_after == 30.0
 
 
 @respx.mock
