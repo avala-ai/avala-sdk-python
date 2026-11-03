@@ -34,6 +34,10 @@ export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_REGION=us-west-2
 export AVALA_E2E_S3_DATA_TYPE=image           # optional, default image
 export AVALA_E2E_ORG_UID=org_...              # required only for keyless --role-arn
 
+# cloud (GCS) — the same test with a gs:// URI and a service-account key
+export AVALA_E2E_S3_URI="gs://my-test-bucket/sample-images/"
+export AVALA_E2E_GCS_AUTH_JSON="$(cat key.json)"
+
 # lerobot — a SMALL public Hugging Face dataset (download can be large/slow)
 export AVALA_E2E_LEROBOT_REPO="lerobot/<small_dataset>"
 export AVALA_E2E_LEROBOT_EPISODES=0           # optional, default episode 0

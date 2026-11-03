@@ -23,6 +23,10 @@ Optional, per-importer:
     export AVALA_E2E_S3_URI="s3://my-test-bucket/sample-images/"
     export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_REGION=us-west-2
 
+    # cloud (GCS) — same test, a gs:// URI plus a service-account key JSON
+    export AVALA_E2E_S3_URI="gs://my-test-bucket/sample-images/"
+    export AVALA_E2E_GCS_AUTH_JSON="$(cat key.json)"
+
     # LeRobot — a SMALL public Hugging Face dataset (download can be large/slow)
     export AVALA_E2E_LEROBOT_REPO="lerobot/<small_dataset>"
 """
@@ -72,7 +76,7 @@ def _assert_ingested(dataset, *, data_type: str, min_items: int = 1) -> None:
 
 
 # folder/rosbag use the manual-upload flow, which the server only serves when
-# MANUAL_DATASET_UPLOADS_BUCKET_NAME (+ AWS creds) is configured — otherwise the
+# MANUAL_DATASET_UPLOADS_BUCKET_NAME (+ S3 creds, or an S3->R2 remap) is configured — otherwise the
 # presign endpoint 500s. Gate them so the default E2E run (and CI without an upload
 # bucket) stays green; set AVALA_E2E_UPLOADS=1 once the server has a bucket wired.
 needs_uploads = pytest.mark.skipif(
@@ -154,7 +158,11 @@ def _skip_if_cloud_source_empty(uri: str) -> None:
     through and the assertion still catches a real 0-item ingest regression.
 
     boto3 missing (shouldn't happen — it's in the ``dev`` extra) → no-op, run as before.
+    A ``gs://`` URI is not pre-flighted (no GCS client in the ``dev`` extra); the
+    ingest assertion still catches a 0-item regression.
     """
+    if not uri.startswith("s3://"):
+        return
     try:
         import boto3
     except ImportError:
@@ -190,15 +198,21 @@ def test_e2e_cloud_s3(client):
     _skip_if_cloud_source_empty(uri)
     data_type = os.environ.get("AVALA_E2E_S3_DATA_TYPE", "image")
     slug = _unique("cloud-s3")
+    if uri.startswith(("gs://", "gcs://")):
+        credentials = {"gcs_auth_json": os.environ.get("AVALA_E2E_GCS_AUTH_JSON")}
+    else:
+        credentials = {
+            "region": os.environ.get("AWS_REGION"),
+            "access_key_id": os.environ.get("AWS_ACCESS_KEY_ID"),
+            "secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        }
     ds = import_cloud(
         client,
         uri=uri,
         name=slug,
         slug=slug,
         data_type=data_type,
-        region=os.environ.get("AWS_REGION"),
-        access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
-        secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        **credentials,
         organization_uid=os.environ.get("AVALA_E2E_ORG_UID"),
         wait=True,
         wait_timeout=WAIT_TIMEOUT,
