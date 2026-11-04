@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 
@@ -26,3 +26,6 @@ class StorageConfig(BaseModel):
 class StorageConfigSetupInfo(BaseModel):
     avala_aws_account_id: str
     external_id: str
+    # Trust-policy values for new IAM-role connections (Google federation, no Avala AWS account).
+    # Optional so older servers that do not return it still validate.
+    google_federation: Optional[Dict[str, Any]] = None
