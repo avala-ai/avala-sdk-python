@@ -24,6 +24,15 @@ class Dataset(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+class PlaybackBounds(BaseModel):
+    """Verified saved playback interval from the item detail response, in nanoseconds."""
+
+    origin_ns: str
+    duration_ns: int
+    start_offset_ns: int
+    end_offset_ns: int
+
+
 class DatasetItem(BaseModel):
     id: Optional[int] = None
     uid: str
@@ -35,6 +44,7 @@ class DatasetItem(BaseModel):
     dataset_slug: Optional[str] = None
     # Detail-only; list and older responses may omit this read-only field.
     masks_fingerprint: Optional[str] = None
+    playback_bounds: Optional[PlaybackBounds] = None
     url: Optional[str] = None
     gpu_texture_url: Optional[str] = None
     thumbnails: Optional[List[str]] = None

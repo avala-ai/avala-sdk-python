@@ -14,7 +14,7 @@ from avala.types.annotation_issue import (
 )
 from avala.types.auto_label_job import AutoLabelJob
 from avala.types.consensus import ConsensusComputeResult, ConsensusConfig, ConsensusScore, ConsensusSummary
-from avala.types.dataset import Dataset, DatasetItem, DatasetSequence
+from avala.types.dataset import Dataset, DatasetItem, DatasetSequence, PlaybackBounds
 from avala.types.export import Export
 from avala.types.fleet import Alert, AlertChannel, Device, FleetEvent, Recording, Rule
 from avala.types.inference_provider import InferenceProvider
@@ -54,6 +54,7 @@ __all__ = [
     "Dataset",
     "DatasetItem",
     "DatasetSequence",
+    "PlaybackBounds",
     "Alert",
     "AlertChannel",
     "Device",

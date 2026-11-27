@@ -41,6 +41,14 @@ print(finished.download_url)
 tasks = client.tasks.list(project="project-uid", status="completed")
 ```
 
+## Submit vendor recordings
+
+Hosted vendor contributions and vendor key issuance are paused during the reader-first rollout. For an enabled local or CI environment:
+
+1. Set `AVALA_API_KEY` to a vendor key provisioned for that environment, and `AVALA_BASE_URL` to its API base URL.
+2. With `avala[cli]` installed, run `avala import contribute --source ./delivery-videos --name "Kitchen"`. Names are case-sensitive. The name is required on every delivery. Use another name for a separate dataset. Open the printed Mission Control Review path to play your recordings and see their status. The uploader stages one recording at a time so retries send the same bytes. Allow temporary disk space for your largest recording.
+3. Add files and rerun the same command. The first run creates your private intake. Avala checks the full-file SHA-256 digest and byte count within that dataset. Selecting a different source folder or renaming an unchanged file skips the upload. The CLI reports pending verification until the digest is confirmed, then reports `Already received` on replay. You can send the same recording to another named dataset. Give edited recordings a new filename.
+
 ## Load Public Dataset Revisions
 
 Published Physical AI datasets with open-download rights can be loaded without an Avala account

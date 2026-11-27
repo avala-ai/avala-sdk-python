@@ -10,6 +10,25 @@ def import_group() -> None:
     """Import datasets into Mission Control from external sources."""
 
 
+@import_group.command("contribute")
+@click.option("--name", required=True, help="Name of the private dataset to create or reuse")
+@click.option("--source", type=click.Path(exists=True), required=True, help="Video file or stable source folder")
+@click.pass_context
+def contribute_cmd(ctx: click.Context, source: str, name: str) -> None:
+    """Send new videos and resume interrupted transfers at the same destination."""
+
+    def report(path: str, already_received: bool) -> None:
+        click.echo(f"{'Already received' if already_received else 'Received'}: {path}")
+
+    def report_pending(path: str) -> None:
+        click.echo(f"Received, verification pending: {path}")
+
+    dataset_path = ctx.obj["client"].datasets.contribute_videos(
+        source=source, name=name, on_received=report, on_verification_pending=report_pending
+    )
+    click.echo(f"Mission Control submissions: {dataset_path}/review")
+
+
 @import_group.command("list")
 def list_importers() -> None:
     """List the available import sources."""

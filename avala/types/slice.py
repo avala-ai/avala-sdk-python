@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
+from avala.types.dataset import PlaybackBounds
+
 
 class Slice(BaseModel):
     uid: str
@@ -31,6 +33,7 @@ class SliceItem(BaseModel):
     dataset_slug: Optional[str] = None
     # Detail-only; list and older responses may omit this read-only field.
     masks_fingerprint: Optional[str] = None
+    playback_bounds: Optional[PlaybackBounds] = None
     url: Optional[str] = None
     gpu_texture_url: Optional[str] = None
     thumbnails: Optional[List[str]] = None

@@ -327,6 +327,54 @@ class Datasets(BaseSyncResource):
         data = self._transport.request("POST", "/datasets/", json=payload)
         return Dataset.model_validate(data)
 
+    def contribute_videos(
+        self,
+        source: str,
+        *,
+        name: str,
+        on_received: Callable[[str, bool], None] | None = None,
+        on_verification_pending: Callable[[str], None] | None = None,
+    ) -> str:
+        """Contribute recordings to the named private dataset and return its Mission Control path."""
+        from functools import partial
+        from pathlib import Path
+        from uuid import UUID, uuid4
+
+        import httpx
+
+        from avala._vendor_contribution import contribute_file, retry_upload_operation
+        from avala.importers.video import select_video_files
+
+        name = name.strip()
+        if not 1 <= len(name) <= 100:
+            raise ValueError("An intake name must be between 1 and 100 characters.")
+        root = Path(source)
+        if root.is_symlink():
+            raise ValueError("The source must be a regular file or folder")
+        files = select_video_files(gather_local_files(source), single_file=root.is_file())
+        intake = retry_upload_operation(
+            partial(self._transport.request, "POST", "/vendor-intakes/named/", json={"name": name})
+        )
+        if intake.get("intake_name") != name:
+            raise ValueError("The server did not confirm the requested intake name. No files were sent.")
+        destination = UUID(str(intake["destination_uid"]))
+        dataset_path = str(intake["dataset_path"])
+        endpoint = f"/vendor-intakes/{destination}"
+        run_uid = str(uuid4())
+        runs: set[str] = set()
+        for path, relative in files:
+            run, already_received, verified = contribute_file(
+                path, relative, destination, run_uid, self._transport.request, httpx.Timeout(_UPLOAD_TIMEOUTS)
+            )
+            runs.add(run)
+            if not verified and on_verification_pending:
+                on_verification_pending(relative)
+            elif on_received:
+                on_received(relative, already_received)
+        for run in runs:
+            retry_upload_operation(partial(self._transport.request, "POST", f"{endpoint}/runs/{run}/close/", json={}))
+        return dataset_path
+
     def prepare_manual_upload_batch(
         self,
         dataset_name: str,
